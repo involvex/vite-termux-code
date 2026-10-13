@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {api, type FileItem, type Workspace} from '../lib/api'
 import {fileBadge} from '../lib/icons'
 import {useAppStore} from '../store/useAppStore'
@@ -27,6 +27,7 @@ export default function FileTree() {
 		setStatus,
 		gitDirty,
 		gitBranch,
+		removeWorkspace,
 	} = useAppStore()
 
 	const [expanded, setExpanded] = useState<Record<string, FileItem[]>>({'': []})
@@ -36,6 +37,22 @@ export default function FileTree() {
 	const [filter, setFilter] = useState('')
 	const [gitMap, setGitMap] = useState<Record<string, GitMark>>({})
 	const [dirDirty, setDirDirty] = useState<Set<string>>(new Set())
+	const [draggedWorkspace, setDraggedWorkspace] = useState<number | null>(null)
+	const [dragOverWorkspace, setDragOverWorkspace] = useState<number | null>(
+		null,
+	)
+	const [contextMenu, setContextMenu] = useState<{
+		x: number
+		y: number
+		wsIndex: number
+	} | null>(null)
+	const contextMenuRef = useRef<HTMLDivElement>(null)
+
+	useEffect(() => {
+		const handleClick = () => setContextMenu(null)
+		window.addEventListener('click', handleClick)
+		return () => window.removeEventListener('click', handleClick)
+	}, [])
 
 	const loadDir = useCallback(
 		async (dirPath: string, wsIndex?: number) => {
@@ -228,6 +245,106 @@ export default function FileTree() {
 		}
 	}
 
+	// Drag and drop handlers for workspace reordering
+	const handleDragStart = (e: React.DragEvent, index: number) => {
+		setDraggedWorkspace(index)
+		e.dataTransfer.effectAllowed = 'move'
+		e.dataTransfer.setData('text/plain', index.toString())
+	}
+
+	const handleDragOver = (e: React.DragEvent, index: number) => {
+		e.preventDefault()
+		e.dataTransfer.dropEffect = 'move'
+		if (index !== draggedWorkspace) {
+			setDragOverWorkspace(index)
+		}
+	}
+
+	const handleDragLeave = () => {
+		setDragOverWorkspace(null)
+	}
+
+	const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+		e.preventDefault()
+		const sourceIndex = draggedWorkspace
+		if (sourceIndex === null || sourceIndex === targetIndex) {
+			setDraggedWorkspace(null)
+			setDragOverWorkspace(null)
+			return
+		}
+
+		// Reorder workspaces
+		const newWorkspaces = [...workspaces]
+		const [removed] = newWorkspaces.splice(sourceIndex, 1)
+		newWorkspaces.splice(targetIndex, 0, removed)
+
+		// Update indices
+		const updatedWorkspaces = newWorkspaces.map((w, i) => ({...w, index: i}))
+
+		// Update store and localStorage
+		useAppStore.getState().setWorkspaces(updatedWorkspaces)
+
+		// Adjust active workspace if needed
+		let newActive = activeWorkspace
+		if (activeWorkspace === sourceIndex) {
+			newActive = targetIndex
+		} else if (
+			activeWorkspace > sourceIndex &&
+			activeWorkspace <= targetIndex
+		) {
+			newActive = activeWorkspace - 1
+		} else if (
+			activeWorkspace < sourceIndex &&
+			activeWorkspace >= targetIndex
+		) {
+			newActive = activeWorkspace + 1
+		}
+		if (newActive !== activeWorkspace) {
+			setActiveWorkspace(newActive)
+		}
+
+		setDraggedWorkspace(null)
+		setDragOverWorkspace(null)
+	}
+
+	const handleDragEnd = () => {
+		setDraggedWorkspace(null)
+		setDragOverWorkspace(null)
+	}
+
+	const handleWorkspaceContextMenu = (e: React.MouseEvent, wsIndex: number) => {
+		e.preventDefault()
+		e.stopPropagation()
+		setContextMenu({x: e.clientX, y: e.clientY, wsIndex})
+	}
+
+	const handleRemoveWorkspace = (wsIndex: number) => {
+		if (workspaces.length <= 1) {
+			setStatus('Cannot remove the last workspace')
+			return
+		}
+		const ws = workspaces[wsIndex]
+		if (!window.confirm(`Remove workspace "${ws.name}" (${ws.rootDir})?`)) {
+			setContextMenu(null)
+			return
+		}
+
+		// Call API to remove workspace
+		api
+			.removeWorkspace(wsIndex)
+			.then(() => {
+				// Update local store
+				removeWorkspace(wsIndex)
+				setStatus('workspace removed')
+			})
+			.catch(e => {
+				setStatus(e instanceof Error ? e.message : 'remove workspace failed')
+			})
+			.finally(() => {
+				setContextMenu(null)
+			})
+	}
+
 	const q = filter.trim().toLowerCase()
 	const matches = (item: FileItem) => !q || item.name.toLowerCase().includes(q)
 	const dirHasMatch = (dirPath: string, depth: number): boolean => {
@@ -335,12 +452,29 @@ export default function FileTree() {
 			</ul>
 		)
 
+		const isDragged = draggedWorkspace === index
+		const isDragOver = dragOverWorkspace === index
+
 		return (
 			<div className="workspace-root">
 				<div
-					className={`tree-row workspace-header ${isActive ? 'active' : ''}`}
+					className={`tree-row workspace-header ${isActive ? 'active' : ''} ${isDragged ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
 					onClick={() => setActiveWorkspace(index)}
-					style={{paddingLeft: 8, fontWeight: isActive ? 600 : 400}}
+					onDragStart={e => handleDragStart(e, index)}
+					onDragOver={e => handleDragOver(e, index)}
+					onDragLeave={handleDragLeave}
+					onDrop={e => handleDrop(e, index)}
+					onDragEnd={handleDragEnd}
+					onContextMenu={e => handleWorkspaceContextMenu(e, index)}
+					draggable
+					style={{
+						paddingLeft: 8,
+						fontWeight: isActive ? 600 : 400,
+						opacity: isDragged ? 0.5 : 1,
+						backgroundColor: isDragOver
+							? 'var(--drag-over-bg, rgba(100, 150, 255, 0.2))'
+							: 'transparent',
+					}}
 				>
 					<span className="tree-icon">📦</span>
 					<span
@@ -350,6 +484,14 @@ export default function FileTree() {
 						{wsRootName}
 					</span>
 					<span className="workspace-path muted small">{ws.rootDir}</span>
+					{workspaces.length > 1 && (
+						<span
+							className="drag-handle"
+							title="Drag to reorder"
+						>
+							⋮⋮
+						</span>
+					)}
 				</div>
 				{isActive && renderItems(items, 0)}
 			</div>
@@ -440,8 +582,32 @@ export default function FileTree() {
 					renderWorkspace(ws, i, i === activeWorkspace),
 				)}
 			</div>
+			{contextMenu && (
+				<div
+					ref={contextMenuRef}
+					className="workspace-context-menu"
+					style={{
+						left: contextMenu.x,
+						top: contextMenu.y,
+					}}
+				>
+					<button
+						className="context-menu-item"
+						onClick={() => handleRemoveWorkspace(contextMenu.wsIndex)}
+					>
+						Remove workspace
+					</button>
+					<button
+						className="context-menu-item"
+						onClick={() => setContextMenu(null)}
+					>
+						Cancel
+					</button>
+				</div>
+			)}
 			<div className="muted small">
-				long-press / right-click a file for rename/delete
+				long-press / right-click a file for rename/delete; right-click workspace
+				header to remove
 			</div>
 		</div>
 	)

@@ -1155,3 +1155,67 @@ body {
 	opacity: 0.7;
 	font-size: 10px;
 }
+
+/* drag-and-drop for workspace reordering */
+.workspace-header.dragging {
+	opacity: 0.4;
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.workspace-header.drag-over {
+	background: rgba(100, 150, 255, 0.25) !important;
+	border-left: 2px solid var(--accent) !important;
+}
+
+.drag-handle {
+	color: var(--text-dim);
+	font-size: 16px;
+	line-height: 1;
+	padding: 0 4px;
+	opacity: 0;
+	transition: opacity 0.15s;
+	user-select: none;
+	cursor: grab;
+}
+
+.workspace-header:hover .drag-handle {
+	opacity: 0.6;
+}
+
+.workspace-header.dragging .drag-handle {
+	opacity: 1;
+	cursor: grabbing;
+}
+
+/* workspace context menu */
+.workspace-context-menu {
+	position: fixed;
+	background: var(--bg-side);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+	z-index: 100;
+	min-width: 160px;
+	overflow: hidden;
+}
+
+.context-menu-item {
+	display: block;
+	width: 100%;
+	background: transparent;
+	border: none;
+	color: var(--text);
+	text-align: left;
+	padding: 10px 14px;
+	font-size: 13px;
+	cursor: pointer;
+	min-height: 40px;
+}
+
+.context-menu-item:hover {
+	background: var(--hover-bg);
+}
+
+.context-menu-item.danger {
+	color: var(--danger);
+}
