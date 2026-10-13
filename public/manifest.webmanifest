@@ -1,0 +1,16 @@
+{
+	"name": "td-code",
+	"short_name": "td-code",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#1e1e1e",
+	"theme_color": "#1e1e1e",
+	"description": "Minimal VSCode-like editor for Termux",
+	"icons": [
+		{
+			"src": "/favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		}
+	]
+}

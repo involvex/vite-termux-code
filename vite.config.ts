@@ -8,5 +8,20 @@ export default defineConfig({
 		port: 4444,
 		host: '0.0.0.0',
 		allowedHosts: true,
+		proxy: {
+			'/api': 'http://127.0.0.1:4445',
+			'/ws': {
+				target: 'ws://127.0.0.1:4445',
+				ws: true,
+			},
+			'/term': {
+				target: 'ws://127.0.0.1:4445',
+				ws: true,
+			},
+		},
+	},
+	preview: {
+		port: 4444,
+		host: '0.0.0.0',
 	},
 })
