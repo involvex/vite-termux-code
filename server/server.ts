@@ -187,6 +187,24 @@ async function handleApi(
 		return sendJson(res, 200, {ok: true})
 	}
 
+	// PATCH /api/workspaces/:index - update workspace (e.g., rename)
+	if (url.pathname.startsWith('/api/workspaces/') && method === 'PATCH') {
+		const indexStr = decodeURIComponent(
+			url.pathname.slice('/api/workspaces/'.length),
+		)
+		const index = parseInt(indexStr, 10)
+		if (isNaN(index) || index < 0 || index >= opts.rootDirs.length) {
+			return sendJson(res, 404, {error: 'workspace not found'})
+		}
+		// Parse body to validate JSON (name is stored client-side in localStorage)
+		try {
+			JSON.parse(await readBody(req))
+		} catch {
+			return sendJson(res, 400, {error: 'invalid JSON body'})
+		}
+		return sendJson(res, 200, {ok: true})
+	}
+
 	// --- auth check for everything else under /api ---
 	if (opts.authToken) {
 		const q = url.searchParams.get('token')

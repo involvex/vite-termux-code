@@ -154,6 +154,11 @@ export const api = {
 		req<{ok: boolean}>(`/api/workspaces/${index}`, {
 			method: 'DELETE',
 		}),
+	updateWorkspace: (index: number, data: {name?: string}) =>
+		req<{ok: boolean}>(`/api/workspaces/${index}`, {
+			method: 'PATCH',
+			body: JSON.stringify(data),
+		}),
 	list: (dirPath = '', hidden = false, workspace?: number) =>
 		req<{path: string; items: FileItem[]}>(
 			withWorkspace(

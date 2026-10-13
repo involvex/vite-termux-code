@@ -318,6 +318,34 @@ export default function FileTree() {
 		setContextMenu({x: e.clientX, y: e.clientY, wsIndex})
 	}
 
+	const handleRenameWorkspace = (wsIndex: number) => {
+		const ws = workspaces[wsIndex]
+		const newName = window.prompt('Rename workspace:', ws.name || '')
+		if (!newName || newName === ws.name) {
+			setContextMenu(null)
+			return
+		}
+		api
+			.updateWorkspace(wsIndex, {name: newName})
+			.then(() => {
+				// Update local store
+				useAppStore
+					.getState()
+					.setWorkspaces(
+						workspaces.map((w, i) =>
+							i === wsIndex ? {...w, name: newName} : w,
+						),
+					)
+				setStatus('workspace renamed')
+			})
+			.catch(e => {
+				setStatus(e instanceof Error ? e.message : 'rename workspace failed')
+			})
+			.finally(() => {
+				setContextMenu(null)
+			})
+	}
+
 	const handleRemoveWorkspace = (wsIndex: number) => {
 		if (workspaces.length <= 1) {
 			setStatus('Cannot remove the last workspace')
@@ -593,6 +621,12 @@ export default function FileTree() {
 				>
 					<button
 						className="context-menu-item"
+						onClick={() => handleRenameWorkspace(contextMenu.wsIndex)}
+					>
+						Rename workspace
+					</button>
+					<button
+						className="context-menu-item danger"
 						onClick={() => handleRemoveWorkspace(contextMenu.wsIndex)}
 					>
 						Remove workspace
