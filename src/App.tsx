@@ -1,12 +1,14 @@
 import {useEffect, useState} from 'react'
 import './App.css'
 import BrowserFrame from './components/BrowserFrame'
+import CommandPalette from './components/CommandPalette'
 import EditorTabs from './components/EditorTabs'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
 import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
+import TasksPanel from './components/TasksPanel'
 import {api, wsUrl} from './lib/api'
 import {useAppStore} from './store/useAppStore'
 
@@ -24,6 +26,7 @@ export default function App() {
 		setGit,
 		tabs,
 		updateTab,
+		settings,
 	} = useAppStore()
 	const [termMounted, setTermMounted] = useState(terminalOpen)
 
@@ -115,7 +118,7 @@ export default function App() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [])
 
-	// global Ctrl+S + Ctrl+` (terminal)
+	// global Ctrl+S + Ctrl+` (terminal) + Ctrl+Shift+P / F1 / Ctrl+P (palette)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -128,13 +131,31 @@ export default function App() {
 				e.preventDefault()
 				setTerminalOpen(!useAppStore.getState().terminalOpen)
 			}
+			const inFrame = (e.target as HTMLElement)?.closest?.(
+				'.browser-frame, .xterm',
+			)
+			if (e.key === 'F1' && !inFrame) {
+				e.preventDefault()
+				useAppStore.getState().setPaletteOpen(true)
+			}
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && !inFrame) {
+				// Ctrl+P and Ctrl+Shift+P both open the palette
+				e.preventDefault()
+				useAppStore.getState().setPaletteOpen(true)
+			}
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
 	}, [setTerminalOpen])
 
 	return (
-		<div className="ide">
+		<div
+			className="ide"
+			data-theme={settings.theme}
+			style={{
+				['--editor-font-size' as string]: `${settings.fontSize}px`,
+			}}
+		>
 			<div className="activitybar">
 				<button
 					className={`act ${panel === 'explorer' ? 'active' : ''}`}
@@ -167,6 +188,16 @@ export default function App() {
 					⎇
 				</button>
 				<button
+					className={`act ${panel === 'tasks' ? 'active' : ''}`}
+					title="Tasks (bun/npm)"
+					onClick={() => {
+						setPanel('tasks')
+						setSidebarOpen(true)
+					}}
+				>
+					▶
+				</button>
+				<button
 					className={`act ${panel === 'browser' ? 'active' : ''}`}
 					title="Browser (opencode etc.)"
 					onClick={() => setPanel('browser')}
@@ -179,6 +210,13 @@ export default function App() {
 					onClick={() => setTerminalOpen(!terminalOpen)}
 				>
 					⌨
+				</button>
+				<button
+					className="act"
+					title="Command Palette (Ctrl+Shift+P)"
+					onClick={() => useAppStore.getState().setPaletteOpen(true)}
+				>
+					⌘
 				</button>
 				<div className="act-spacer" />
 				<button
@@ -196,6 +234,8 @@ export default function App() {
 						<FileTree />
 					) : panel === 'search' ? (
 						<SearchPanel />
+					) : panel === 'tasks' ? (
+						<TasksPanel />
 					) : (
 						<GitPanel />
 					)}
@@ -233,6 +273,7 @@ export default function App() {
 			</main>
 
 			<StatusBar />
+			<CommandPalette />
 		</div>
 	)
 }

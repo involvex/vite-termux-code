@@ -1,4 +1,10 @@
 import {create} from 'zustand'
+import {
+	DEFAULT_SETTINGS,
+	loadSettings,
+	saveSettings,
+	type Settings,
+} from '../lib/settings'
 
 export interface OpenTab {
 	path: string
@@ -9,7 +15,7 @@ export interface OpenTab {
 	binary?: boolean
 }
 
-export type Panel = 'explorer' | 'search' | 'browser' | 'git'
+export type Panel = 'explorer' | 'search' | 'browser' | 'git' | 'tasks'
 
 interface AppState {
 	root: string
@@ -19,6 +25,7 @@ interface AppState {
 	showHidden: boolean
 	sidebarOpen: boolean
 	terminalOpen: boolean
+	paletteOpen: boolean
 	panel: Panel
 	tabs: OpenTab[]
 	activePath: string | null
@@ -28,6 +35,7 @@ interface AppState {
 	quickLinks: {label: string; url: string}[]
 	gitBranch: string | null
 	gitDirty: number
+	settings: Settings
 
 	setRoot: (r: string) => void
 	setConnected: (c: boolean) => void
@@ -36,6 +44,7 @@ interface AppState {
 	setShowHidden: (v: boolean) => void
 	setSidebarOpen: (v: boolean) => void
 	setTerminalOpen: (v: boolean) => void
+	setPaletteOpen: (v: boolean) => void
 	setPanel: (p: Panel) => void
 	openTab: (t: OpenTab) => void
 	updateTab: (path: string, patch: Partial<OpenTab>) => void
@@ -46,6 +55,8 @@ interface AppState {
 	browserForward: () => void
 	setQuickLinks: (q: {label: string; url: string}[]) => void
 	setGit: (branch: string | null, dirty: number) => void
+	setSettings: (patch: Partial<Settings>) => void
+	resetSettings: () => void
 }
 
 const DEFAULT_LINKS = [
@@ -72,6 +83,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	showHidden: false,
 	sidebarOpen: true,
 	terminalOpen: false,
+	paletteOpen: false,
 	panel: 'explorer',
 	tabs: [],
 	activePath: null,
@@ -81,6 +93,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	quickLinks: loadLinks(),
 	gitBranch: null,
 	gitDirty: 0,
+	settings: loadSettings(),
 
 	setRoot: root => set({root}),
 	setConnected: connected => set({connected}),
@@ -89,6 +102,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	setShowHidden: showHidden => set({showHidden}),
 	setSidebarOpen: sidebarOpen => set({sidebarOpen}),
 	setTerminalOpen: terminalOpen => set({terminalOpen}),
+	setPaletteOpen: paletteOpen => set({paletteOpen}),
 	setPanel: panel => set({panel}),
 	openTab: t =>
 		set(s => {
@@ -143,4 +157,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
 		set({quickLinks})
 	},
 	setGit: (gitBranch, gitDirty) => set({gitBranch, gitDirty}),
+	setSettings: patch =>
+		set(s => {
+			const settings = {...s.settings, ...patch}
+			saveSettings(settings)
+			return {settings}
+		}),
+	resetSettings: () => {
+		saveSettings({...DEFAULT_SETTINGS})
+		set({settings: {...DEFAULT_SETTINGS}})
+	},
 }))

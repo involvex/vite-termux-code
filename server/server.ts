@@ -20,8 +20,10 @@ import {
 	gitStatus,
 	gitUnstage,
 } from './git.ts'
+import {LspManager} from './lsp.ts'
 import {lookup as mimeLookup} from './mime.ts'
 import {resolveSafe} from './paths.ts'
+import {listTasks, resolveTask} from './tasks.ts'
 import {TermManager} from './terminal.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -110,6 +112,7 @@ async function handleApi(
 	url: URL,
 	opts: ServeOptions,
 	terms: TermManager | null,
+	lsp: LspManager,
 ) {
 	const method = req.method?.toUpperCase() ?? 'GET'
 
@@ -465,6 +468,73 @@ async function handleApi(
 		}
 	}
 
+	if (url.pathname === '/api/tasks' && method === 'GET') {
+		try {
+			return sendJson(res, 200, await listTasks(opts.rootDir))
+		} catch (err) {
+			return sendJson(res, 500, {
+				error: err instanceof Error ? err.message : 'failed to list tasks',
+			})
+		}
+	}
+
+	if (url.pathname === '/api/tasks/run' && method === 'POST') {
+		if (!terms)
+			return sendJson(res, 403, {error: 'terminal disabled (--no-terms)'})
+		let body: {id?: string}
+		try {
+			body = JSON.parse(await readBody(req))
+		} catch {
+			return sendJson(res, 400, {error: 'invalid JSON body'})
+		}
+		if (!body.id) return sendJson(res, 400, {error: 'missing id'})
+		const task = await resolveTask(opts.rootDir, body.id)
+		if (!task) return sendJson(res, 404, {error: 'unknown task'})
+		if (task.id.startsWith('missing:'))
+			return sendJson(res, 400, {error: 'no bun/npm on PATH'})
+		try {
+			const info = terms.create({})
+			// Small delay lets the shell print its prompt first so the
+			// command doesn't get lost in spawn races on slow devices.
+			setTimeout(() => terms.input(info.id, `${task.command}\n`), 250)
+			return sendJson(res, 201, {termId: info.id, task})
+		} catch (err) {
+			const status =
+				typeof (err as {status?: unknown}).status === 'number'
+					? ((err as {status: number}).status as number)
+					: 400
+			return sendJson(res, status, {
+				error: err instanceof Error ? err.message : 'failed to run task',
+			})
+		}
+	}
+
+	if (url.pathname === '/api/lsp/status' && method === 'GET') {
+		return sendJson(res, 200, {langs: lsp.status()})
+	}
+
+	if (url.pathname === '/api/lsp/ensure' && method === 'POST') {
+		let body: {lang?: string}
+		try {
+			body = JSON.parse(await readBody(req))
+		} catch {
+			return sendJson(res, 400, {error: 'invalid JSON body'})
+		}
+		const lang = body.lang ?? 'typescript'
+		try {
+			await lsp.ensure(lang)
+			return sendJson(res, 200, {ok: true, lang})
+		} catch (err) {
+			const status =
+				typeof (err as {status?: unknown}).status === 'number'
+					? ((err as {status: number}).status as number)
+					: 400
+			return sendJson(res, status, {
+				error: err instanceof Error ? err.message : 'failed to start LSP',
+			})
+		}
+	}
+
 	return sendJson(res, 404, {error: 'unknown api route'})
 }
 
@@ -537,15 +607,20 @@ export function lanIps(): string[] {
 export async function startServer(opts: ServeOptions): Promise<void> {
 	const distDir = path.resolve(__dirname, '../dist')
 	const terms = opts.noTerms ? null : new TermManager(opts.rootDir)
+	const lsp = new LspManager(opts.rootDir)
 	const server = createServer(async (req, res) => {
 		try {
 			const host = req.headers.host ?? `localhost:${opts.port}`
 			const url = new URL(req.url ?? '/', `http://${host}`)
 			if (url.pathname.startsWith('/api/')) {
-				await handleApi(req, res, url, opts, terms)
+				await handleApi(req, res, url, opts, terms, lsp)
 				return
 			}
-			if (url.pathname === '/ws' || url.pathname === '/term') {
+			if (
+				url.pathname === '/ws' ||
+				url.pathname === '/term' ||
+				url.pathname === '/lsp'
+			) {
 				res.writeHead(426).end('use websocket')
 				return
 			}
@@ -563,6 +638,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	// second one runs. This is the documented `ws` sharing pattern.)
 	const wss = new WebSocketServer({noServer: true})
 	const termWss = new WebSocketServer({noServer: true})
+	const lspWss = new WebSocketServer({noServer: true})
 	const clients = new Set<WebSocket>()
 	wss.on('connection', (ws, req) => {
 		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
@@ -597,6 +673,23 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		terms.attach(ws, id)
 	})
 
+	// WebSocket for language servers
+	lspWss.on('connection', (ws, req) => {
+		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+			ws.close(4401, 'unauthorized')
+			return
+		}
+		let lang = 'typescript'
+		try {
+			lang =
+				new URL(req.url ?? '/', 'http://x').searchParams.get('lang') ??
+				'typescript'
+		} catch {
+			/* ignore */
+		}
+		lsp.attach(ws, lang)
+	})
+
 	server.on('upgrade', (req, socket, head) => {
 		let pathname = '/'
 		try {
@@ -611,6 +704,10 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		} else if (pathname === '/term') {
 			termWss.handleUpgrade(req, socket, head, ws =>
 				termWss.emit('connection', ws, req),
+			)
+		} else if (pathname === '/lsp') {
+			lspWss.handleUpgrade(req, socket, head, ws =>
+				lspWss.emit('connection', ws, req),
 			)
 		} else {
 			socket.destroy()
@@ -671,8 +768,10 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	const shutdown = () => {
 		watcher?.close().catch(() => {})
 		terms?.killAll()
+		lsp.shutdown()
 		wss.close()
 		termWss.close()
+		lspWss.close()
 		server.close(() => process.exit(0))
 		setTimeout(() => process.exit(0), 1500).unref()
 	}

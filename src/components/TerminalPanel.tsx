@@ -4,6 +4,7 @@ import {Terminal} from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {api, termWsUrl, type TermSession} from '../lib/api'
+import {themeById} from '../lib/themes'
 import {useAppStore} from '../store/useAppStore'
 
 interface Live {
@@ -28,14 +29,15 @@ const MOBILE_KEYS: {label: string; data: string; title: string}[] = [
 ]
 
 export default function TerminalPanel({visible}: {visible: boolean}) {
-	const {setStatus} = useAppStore()
+	const {setStatus, settings, setSettings} = useAppStore()
 	const [sessions, setSessions] = useState<TermSession[]>([])
 	const [activeId, setActiveId] = useState<string | null>(null)
 	const [creating, setCreating] = useState(false)
 	const [loaded, setLoaded] = useState(false)
 	const [disabled, setDisabled] = useState(false)
 	const [error, setError] = useState('')
-	const [fontSize, setFontSize] = useState(14)
+	const fontSize = settings.termFontSize
+	const xt = themeById(settings.theme).xterm
 	const divRefs = useRef(new Map<string, HTMLDivElement>())
 	const liveRefs = useRef(new Map<string, Live>())
 	const backoffRef = useRef(new Map<string, number>())
@@ -147,10 +149,10 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 				fontSize,
 				scrollback: 3000,
 				theme: {
-					background: '#1e1e1e',
-					foreground: '#cccccc',
-					cursor: '#aeafad',
-					selectionBackground: 'rgba(0, 122, 204, 0.4)',
+					background: xt.background,
+					foreground: xt.foreground,
+					cursor: xt.cursor,
+					selectionBackground: xt.selectionBackground,
 				},
 			})
 			const fit = new FitAddon()
@@ -176,7 +178,7 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 				/* will fit when shown */
 			}
 		},
-		[connect, fontSize, sendInput, sendResize],
+		[connect, fontSize, sendInput, sendResize, xt],
 	)
 
 	// initial list
@@ -257,17 +259,23 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 		return () => window.removeEventListener('resize', onResize)
 	}, [activeId, sendResize])
 
-	// apply font size to all live terminals
+	// apply font size + theme to all live terminals
 	useEffect(() => {
 		for (const live of liveRefs.current.values()) {
 			try {
 				live.term.options.fontSize = fontSize
+				live.term.options.theme = {
+					background: xt.background,
+					foreground: xt.foreground,
+					cursor: xt.cursor,
+					selectionBackground: xt.selectionBackground,
+				}
 				live.fit.fit()
 			} catch {
 				/* ignore */
 			}
 		}
-	}, [fontSize])
+	}, [fontSize, xt])
 
 	const create = useCallback(async () => {
 		setCreating(true)
@@ -396,14 +404,18 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 					<button
 						className="icon-btn"
 						title="Smaller font"
-						onClick={() => setFontSize(f => Math.max(10, f - 1))}
+						onClick={() =>
+							setSettings({termFontSize: Math.max(10, fontSize - 1)})
+						}
 					>
 						A-
 					</button>
 					<button
 						className="icon-btn"
 						title="Bigger font"
-						onClick={() => setFontSize(f => Math.min(22, f + 1))}
+						onClick={() =>
+							setSettings({termFontSize: Math.min(22, fontSize + 1)})
+						}
 					>
 						A+
 					</button>

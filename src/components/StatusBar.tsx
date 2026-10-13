@@ -1,3 +1,4 @@
+import {nextThemeId, themeById, THEMES} from '../lib/themes'
 import {useAppStore} from '../store/useAppStore'
 
 export default function StatusBar() {
@@ -14,6 +15,8 @@ export default function StatusBar() {
 		gitDirty,
 		setPanel,
 		setSidebarOpen,
+		settings,
+		setSettings,
 	} = useAppStore()
 	const active = tabs.find(t => t.path === activePath)
 	const dirty = active ? active.content !== active.savedContent : false
@@ -46,6 +49,13 @@ export default function StatusBar() {
 				{active ? `${active.path}${dirty ? ' ●' : ''}` : 'no file'}
 			</span>
 			<span className="spacer" />
+			<button
+				className="status-term"
+				title={`Theme: ${themeById(settings.theme).label} (click to switch: ${THEMES.map(t => t.label).join(' → ')})`}
+				onClick={() => setSettings({theme: nextThemeId(settings.theme)})}
+			>
+				◐ {themeById(settings.theme).label}
+			</button>
 			<button
 				className="status-term"
 				title="Toggle terminal (Ctrl+`)"

@@ -71,6 +71,8 @@ Production: `bun run build` → `dist/` (UI) + `dist/cli.js` (server, `bin: td-c
 - `WS /ws` → `{type: add|change|unlink|addDir|unlinkDir, path}`
 - Terminal: `GET /api/terms`, `POST /api/terms {cwd?, shell?, cols?, rows?}`, `DELETE /api/terms/:id`, `WS /term?id=` (`{type:'input'|'resize'}` ↔ `{type:'replay'|'data'|'exit'}`)
 - Git: `GET /api/git/status|log|diff|branches`, `POST /api/git/stage|unstage|commit|checkout`
+- Tasks: `GET /api/tasks` (bun/npm scripts from `package.json` + `Makefile` targets), `POST /api/tasks/run {id}` → `{termId, task}` (runs in a new terminal session)
+- LSP: `GET /api/lsp/status`, `POST /api/lsp/ensure {lang}`, `WS /lsp?lang=typescript` (`{type:'open'|'change'|'close'|'request'|'ensure'}` ↔ `{type:'opened'|'response'|'diagnostics'|'ready'|'error'}`)
 
 ## Terminal (no node-pty, Termux-safe)
 
@@ -92,6 +94,28 @@ Notes:
 ## Source Control (⎇ tab)
 
 Spawns your real `git` (zero new dependencies — uses your config and credentials; Termux: `pkg install git`). Status, stage/unstage per file or all, inline diffs, commit (with optional inline name/email, or your repo's `user.name`/`user.email`), recent log, branch list + checkout, and a `⎇ branch +N` indicator in the status bar. All file arguments are jailed to the served directory; outside a repo the tab shows a "not a git repository" state.
+
+## Task Runner (▶ tab)
+
+Lists `scripts` from the root `package.json` as runnable tasks — one entry per available runtime (`bun run <script>` when `bun` is on `PATH`, `npm run <script>` when `npm` is) — plus explicit targets parsed from a root `Makefile`/`makefile`/`GNUmakefile` (`make <target>` when `make` is on `PATH`). Clicking a task spawns a new integrated terminal session and types the command there, so output streams live with scrollback replay.
+
+## Language Server (TypeScript/JavaScript)
+
+`.ts/.tsx/.js/.jsx` files get diagnostics (squiggles + gutter), hover tooltips, LSP-powered completions, and go-to-definition (`Ctrl/Cmd+Click` or `F12`; cross-file jumps open the target). The server spawns `typescript-language-server --stdio` on demand (via the binary on `PATH`, `bunx`, or `npx`) and bridges it to the editor over `WS /lsp`:
+
+```bash
+bun add -d typescript-language-server typescript
+```
+
+If the server can't start, the editor shows a banner with the error and keeps working without intelligence (syntax highlight + bracket matching unaffected).
+
+## Command Palette (⌘ button, Ctrl+Shift+P / Ctrl+P / F1)
+
+Fuzzy-matched command list: switch panels, toggle sidebar/terminal, new/save/close files, stage/unstage all, restart the language server, switch themes, reset settings. Ignored while the browser tab or terminal has focus.
+
+## Themes & Settings
+
+Three themes (One Dark, GitHub Light, Dracula) switchable from the `◐` chip in the status bar or the palette — applied to UI, editor, and terminal together. Editor font size, terminal font size, tab size, spaces-vs-tabs, and word wrap persist in `localStorage` (`td-code-settings-v1`) across reloads; terminal `A-`/`A+` buttons adjust and persist the terminal font.
 
 ## Notes / limits (by design for Termux)
 

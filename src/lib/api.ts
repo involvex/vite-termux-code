@@ -62,6 +62,15 @@ export interface GitBranch {
 	current: boolean
 }
 
+export interface TaskDef {
+	id: string
+	label: string
+	kind: 'bun' | 'npm' | 'make'
+	script: string
+	command: string
+	detail?: string
+}
+
 function getToken(): string {
 	const url = new URL(window.location.href)
 	const q = url.searchParams.get('token')
@@ -175,6 +184,25 @@ export const api = {
 			method: 'POST',
 			body: JSON.stringify({ref}),
 		}),
+	tasks: () =>
+		req<{
+			tasks: TaskDef[]
+			runners: {bun: string | null; npm: string | null; make: string | null}
+		}>('/api/tasks'),
+	runTask: (id: string) =>
+		req<{termId: string; task: TaskDef}>('/api/tasks/run', {
+			method: 'POST',
+			body: JSON.stringify({id}),
+		}),
+	lspStatus: () =>
+		req<{langs: {lang: string; running: boolean; error?: string}[]}>(
+			'/api/lsp/status',
+		),
+	lspEnsure: (lang: string) =>
+		req<{ok: boolean; lang: string}>('/api/lsp/ensure', {
+			method: 'POST',
+			body: JSON.stringify({lang}),
+		}),
 }
 
 function wsBase(): string {
@@ -195,6 +223,12 @@ export function termWsUrl(id: string): string {
 	const t = getToken()
 	const q = `id=${encodeURIComponent(id)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
 	return `${wsBase()}/term?${q}`
+}
+
+export function lspWsUrl(lang: string): string {
+	const t = getToken()
+	const q = `lang=${encodeURIComponent(lang)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
+	return `${wsBase()}/lsp?${q}`
 }
 
 export function extToLanguage(filePath: string): string {
