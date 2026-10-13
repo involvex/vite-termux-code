@@ -9,7 +9,7 @@ export interface OpenTab {
 	binary?: boolean
 }
 
-export type Panel = 'explorer' | 'search' | 'browser'
+export type Panel = 'explorer' | 'search' | 'browser' | 'git'
 
 interface AppState {
 	root: string
@@ -26,6 +26,8 @@ interface AppState {
 	browserHistory: string[]
 	browserIndex: number
 	quickLinks: {label: string; url: string}[]
+	gitBranch: string | null
+	gitDirty: number
 
 	setRoot: (r: string) => void
 	setConnected: (c: boolean) => void
@@ -43,6 +45,7 @@ interface AppState {
 	browserBack: () => void
 	browserForward: () => void
 	setQuickLinks: (q: {label: string; url: string}[]) => void
+	setGit: (branch: string | null, dirty: number) => void
 }
 
 const DEFAULT_LINKS = [
@@ -76,6 +79,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	browserHistory: ['http://localhost:4096'],
 	browserIndex: 0,
 	quickLinks: loadLinks(),
+	gitBranch: null,
+	gitDirty: 0,
 
 	setRoot: root => set({root}),
 	setConnected: connected => set({connected}),
@@ -137,4 +142,5 @@ export const useAppStore = create<AppState>()((set, get) => ({
 		localStorage.setItem('td-code-links', JSON.stringify(quickLinks))
 		set({quickLinks})
 	},
+	setGit: (gitBranch, gitDirty) => set({gitBranch, gitDirty}),
 }))

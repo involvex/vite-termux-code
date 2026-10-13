@@ -70,6 +70,7 @@ Production: `bun run build` → `dist/` (UI) + `dist/cli.js` (server, `bin: td-c
 - `GET /api/search?q=&path=`
 - `WS /ws` → `{type: add|change|unlink|addDir|unlinkDir, path}`
 - Terminal: `GET /api/terms`, `POST /api/terms {cwd?, shell?, cols?, rows?}`, `DELETE /api/terms/:id`, `WS /term?id=` (`{type:'input'|'resize'}` ↔ `{type:'replay'|'data'|'exit'}`)
+- Git: `GET /api/git/status|log|diff|branches`, `POST /api/git/stage|unstage|commit|checkout`
 
 ## Terminal (no node-pty, Termux-safe)
 
@@ -87,6 +88,10 @@ Notes:
 - Same token auth as the file API (HTTP + WS close `4401` without it). Sharing on untrusted LAN? Use `--no-terms` to disable the shell while keeping files/browser.
 - PTY size is fixed at spawn (default 80×24 or the requested `cols`/`rows`); the client re-fits its own viewport on resize.
 - The drawer auto-starts one shell when first opened; `+ new` spawns more.
+
+## Source Control (⎇ tab)
+
+Spawns your real `git` (zero new dependencies — uses your config and credentials; Termux: `pkg install git`). Status, stage/unstage per file or all, inline diffs, commit (with optional inline name/email, or your repo's `user.name`/`user.email`), recent log, branch list + checkout, and a `⎇ branch +N` indicator in the status bar. All file arguments are jailed to the served directory; outside a repo the tab shows a "not a git repository" state.
 
 ## Notes / limits (by design for Termux)
 

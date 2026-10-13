@@ -1,17 +1,14 @@
-import {Suspense, lazy, useEffect, useState} from 'react'
+import {useEffect, useState} from 'react'
 import './App.css'
 import BrowserFrame from './components/BrowserFrame'
 import EditorTabs from './components/EditorTabs'
 import FileTree from './components/FileTree'
+import GitPanel from './components/GitPanel'
+import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
 import {api, wsUrl} from './lib/api'
 import {useAppStore} from './store/useAppStore'
-
-// xterm is heavy: split it out and don't even mount the drawer until the
-// user first opens the terminal. Sessions survive because we keep it mounted
-// afterwards (visibility is CSS-driven inside).
-const TerminalPanel = lazy(() => import('./components/TerminalPanel'))
 
 export default function App() {
 	const {
@@ -24,6 +21,7 @@ export default function App() {
 		setSidebarOpen,
 		terminalOpen,
 		setTerminalOpen,
+		setGit,
 		tabs,
 		updateTab,
 	} = useAppStore()
@@ -41,7 +39,21 @@ export default function App() {
 				setStatus(`td-code v${h.version}`)
 			})
 			.catch(e => setStatus(e instanceof Error ? e.message : 'offline'))
-	}, [setRoot, setStatus])
+		// best-effort branch indicator for the status bar (GitPanel refreshes it too)
+		api
+			.gitStatus()
+			.then(s => {
+				if (s.repo) {
+					setGit(
+						s.branch ?? null,
+						(s.staged?.length ?? 0) +
+							(s.unstaged?.length ?? 0) +
+							(s.untracked?.length ?? 0),
+					)
+				}
+			})
+			.catch(() => {})
+	}, [setRoot, setStatus, setGit])
 
 	// file watcher socket
 	useEffect(() => {
@@ -145,6 +157,16 @@ export default function App() {
 					🔍
 				</button>
 				<button
+					className={`act ${panel === 'git' ? 'active' : ''}`}
+					title="Source Control"
+					onClick={() => {
+						setPanel('git')
+						setSidebarOpen(true)
+					}}
+				>
+					⎇
+				</button>
+				<button
 					className={`act ${panel === 'browser' ? 'active' : ''}`}
 					title="Browser (opencode etc.)"
 					onClick={() => setPanel('browser')}
@@ -170,7 +192,13 @@ export default function App() {
 
 			{sidebarOpen && panel !== 'browser' && (
 				<aside className="sidebar">
-					{panel === 'explorer' ? <FileTree /> : <SearchPanel />}
+					{panel === 'explorer' ? (
+						<FileTree />
+					) : panel === 'search' ? (
+						<SearchPanel />
+					) : (
+						<GitPanel />
+					)}
 				</aside>
 			)}
 
@@ -179,9 +207,28 @@ export default function App() {
 					{panel === 'browser' ? <BrowserFrame /> : <EditorTabs />}
 				</div>
 				{termMounted && (
-					<Suspense fallback={null}>
-						<TerminalPanel visible={terminalOpen} />
-					</Suspense>
+					<Reloadable
+						factory={() => import('./components/TerminalPanel')}
+						loading={
+							<div className="term-drawer">
+								<div className="muted">loading terminal…</div>
+							</div>
+						}
+						failed={retry => (
+							<div className="term-drawer">
+								<div className="error">
+									Terminal failed to load (network?).{' '}
+									<button
+										className="chip"
+										onClick={retry}
+									>
+										Retry
+									</button>
+								</div>
+							</div>
+						)}
+						props={{visible: terminalOpen}}
+					/>
 				)}
 			</main>
 

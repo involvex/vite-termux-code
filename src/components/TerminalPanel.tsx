@@ -34,11 +34,11 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 	const [creating, setCreating] = useState(false)
 	const [loaded, setLoaded] = useState(false)
 	const [disabled, setDisabled] = useState(false)
+	const [error, setError] = useState('')
 	const [fontSize, setFontSize] = useState(14)
 	const divRefs = useRef(new Map<string, HTMLDivElement>())
 	const liveRefs = useRef(new Map<string, Live>())
-	const sessionsRef = useRef<TermSession[]>([])
-	sessionsRef.current = sessions
+	const backoffRef = useRef(new Map<string, number>())
 
 	const sendInput = useCallback((id: string, data: string) => {
 		const live = liveRefs.current.get(id)
@@ -79,7 +79,10 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 				return
 			}
 			live.ws = ws
-			ws.onopen = () => sendResize(id)
+			ws.onopen = () => {
+				backoffRef.current.set(id, 1000)
+				sendResize(id)
+			}
 			ws.onmessage = ev => {
 				try {
 					const msg = JSON.parse(ev.data as string) as {
@@ -104,11 +107,24 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 					/* ignore malformed */
 				}
 			}
-			ws.onclose = () => {
+			ws.onclose = ev => {
 				if (live.closed) return
 				live.ws = null
-				// reconnect to pick up scrollback replay (server keeps the buffer)
-				live.reconnectTimer = window.setTimeout(() => connect(id), 1000)
+				// Don't reconnect when the server deliberately closed us:
+				// 1000 = session removed, 44xx = app-level refusal
+				// (unknown/disabled/unauthorized session).
+				if (ev.code === 1000 || (ev.code >= 4400 && ev.code <= 4499)) {
+					markDead(id, null)
+					return
+				}
+				// Network drop: reconnect with backoff to pick up the
+				// scrollback replay (server keeps the buffer).
+				const backoff = Math.min(
+					10000,
+					(backoffRef.current.get(id) ?? 1000) * 2,
+				)
+				backoffRef.current.set(id, backoff)
+				live.reconnectTimer = window.setTimeout(() => connect(id), backoff)
 			}
 			ws.onerror = () => {
 				try {
@@ -172,13 +188,19 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 				if (cancelled) return
 				setSessions(r.terms)
 				setActiveId(prev => prev ?? r.terms[0]?.id ?? null)
+				setError('')
 				setLoaded(true)
 			})
 			.catch(e => {
 				if (cancelled) return
 				const msg = e instanceof Error ? e.message : 'failed'
 				if (msg.includes('403')) setDisabled(true)
-				else setStatus(`terminal: ${msg}`)
+				else if (msg.includes('404'))
+					setError(
+						'server too old: restart td-code from a build with terminal support',
+					)
+				else setError(msg)
+				setStatus(`terminal: ${msg}`)
 				setLoaded(true)
 			})
 		return () => {
@@ -253,10 +275,12 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 			const info = await api.createTerm({cols: 80, rows: 24})
 			setSessions(prev => [...prev, info])
 			setActiveId(info.id)
+			setError('')
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'create failed'
 			if (msg.includes('403')) setDisabled(true)
-			else setStatus(`terminal: ${msg}`)
+			else setError(msg)
+			setStatus(`terminal: ${msg}`)
 		} finally {
 			setCreating(false)
 		}
@@ -403,8 +427,15 @@ export default function TerminalPanel({visible}: {visible: boolean}) {
 					))}
 					{sessions.length === 0 && loaded && (
 						<div className="muted">
-							{creating ? 'starting shell…' : 'no sessions'}
+							{creating
+								? 'starting shell…'
+								: error
+									? `error: ${error}`
+									: 'no sessions'}
 						</div>
+					)}
+					{error && sessions.length > 0 && (
+						<div className="error">error: {error}</div>
 					)}
 				</div>
 			)}

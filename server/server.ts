@@ -9,6 +9,17 @@ import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {WebSocketServer, type WebSocket} from 'ws'
+import {
+	GitError,
+	gitBranches,
+	gitCheckout,
+	gitCommit,
+	gitDiff,
+	gitLog,
+	gitStage,
+	gitStatus,
+	gitUnstage,
+} from './git.ts'
 import {lookup as mimeLookup} from './mime.ts'
 import {resolveSafe} from './paths.ts'
 import {TermManager} from './terminal.ts'
@@ -358,7 +369,111 @@ async function handleApi(
 		return sendJson(res, 200, {ok: true})
 	}
 
+	if (url.pathname === '/api/git/status' && method === 'GET') {
+		try {
+			return sendJson(res, 200, await gitStatus(opts.rootDir))
+		} catch (err) {
+			// friendly empty state for the Source Control tab
+			if (
+				err instanceof GitError &&
+				err.status === 404 &&
+				err.message === 'not a git repository'
+			) {
+				return sendJson(res, 200, {repo: false})
+			}
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/log' && method === 'GET') {
+		try {
+			const limit = Number(url.searchParams.get('limit') ?? 20)
+			return sendJson(res, 200, {commits: await gitLog(opts.rootDir, limit)})
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/diff' && method === 'GET') {
+		try {
+			const file = url.searchParams.get('file') ?? ''
+			const staged = url.searchParams.get('staged') === '1'
+			if (!file) return sendJson(res, 400, {error: 'missing ?file='})
+			return sendJson(res, 200, await gitDiff(opts.rootDir, file, staged))
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/stage' && method === 'POST') {
+		try {
+			const body = JSON.parse(await readBody(req)) as {files?: string[]}
+			await gitStage(opts.rootDir, body.files ?? [])
+			return sendJson(res, 200, {ok: true})
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/unstage' && method === 'POST') {
+		try {
+			const body = JSON.parse(await readBody(req)) as {files?: string[]}
+			await gitUnstage(opts.rootDir, body.files ?? [])
+			return sendJson(res, 200, {ok: true})
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/commit' && method === 'POST') {
+		try {
+			const body = JSON.parse(await readBody(req)) as {
+				message?: string
+				name?: string
+				email?: string
+			}
+			return sendJson(
+				res,
+				200,
+				await gitCommit(
+					opts.rootDir,
+					body.message ?? '',
+					body.name,
+					body.email,
+				),
+			)
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/branches' && method === 'GET') {
+		try {
+			return sendJson(res, 200, {branches: await gitBranches(opts.rootDir)})
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
+	if (url.pathname === '/api/git/checkout' && method === 'POST') {
+		try {
+			const body = JSON.parse(await readBody(req)) as {ref?: string}
+			await gitCheckout(opts.rootDir, body.ref ?? '')
+			return sendJson(res, 200, {ok: true})
+		} catch (err) {
+			return gitErr(res, err)
+		}
+	}
+
 	return sendJson(res, 404, {error: 'unknown api route'})
+}
+
+function gitErr(res: ServerResponse, err: unknown) {
+	if (err instanceof GitError)
+		return sendJson(res, err.status, {error: err.message})
+	if (err instanceof SyntaxError)
+		return sendJson(res, 400, {error: 'invalid JSON body'})
+	return sendJson(res, 500, {error: 'internal error'})
 }
 
 async function serveStatic(

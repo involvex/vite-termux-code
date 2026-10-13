@@ -10,6 +10,10 @@ export default function StatusBar() {
 		activePath,
 		terminalOpen,
 		setTerminalOpen,
+		gitBranch,
+		gitDirty,
+		setPanel,
+		setSidebarOpen,
 	} = useAppStore()
 	const active = tabs.find(t => t.path === activePath)
 	const dirty = active ? active.content !== active.savedContent : false
@@ -25,6 +29,19 @@ export default function StatusBar() {
 			>
 				{root || '…'}
 			</span>
+			{gitBranch && (
+				<button
+					className="status-term"
+					title="Source Control"
+					onClick={() => {
+						setPanel('git')
+						setSidebarOpen(true)
+					}}
+				>
+					⎇ {gitBranch}
+					{gitDirty > 0 ? ` +${gitDirty}` : ''}
+				</button>
+			)}
 			<span className="status-item">
 				{active ? `${active.path}${dirty ? ' ●' : ''}` : 'no file'}
 			</span>

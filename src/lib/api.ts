@@ -33,6 +33,35 @@ export interface TermSession {
 	createdAt: number
 }
 
+export interface GitChange {
+	path: string
+	kind: string
+}
+
+export interface GitStatus {
+	repo: boolean
+	branch?: string | null
+	detached?: boolean
+	ahead?: number
+	behind?: number
+	staged?: GitChange[]
+	unstaged?: GitChange[]
+	untracked?: string[]
+}
+
+export interface GitCommit {
+	hash: string
+	short: string
+	subject: string
+	author: string
+	date: string
+}
+
+export interface GitBranch {
+	name: string
+	current: boolean
+}
+
 function getToken(): string {
 	const url = new URL(window.location.href)
 	const q = url.searchParams.get('token')
@@ -118,6 +147,34 @@ export const api = {
 		req<{ok: boolean}>(`/api/terms/${encodeURIComponent(id)}`, {
 			method: 'DELETE',
 		}),
+	gitStatus: () => req<GitStatus>('/api/git/status'),
+	gitLog: (limit = 15) =>
+		req<{commits: GitCommit[]}>(`/api/git/log?limit=${limit}`),
+	gitDiff: (file: string, staged: boolean) =>
+		req<{diff: string; truncated: boolean}>(
+			`/api/git/diff?file=${encodeURIComponent(file)}&staged=${staged ? '1' : '0'}`,
+		),
+	gitStage: (files: string[]) =>
+		req<{ok: boolean}>('/api/git/stage', {
+			method: 'POST',
+			body: JSON.stringify({files}),
+		}),
+	gitUnstage: (files: string[]) =>
+		req<{ok: boolean}>('/api/git/unstage', {
+			method: 'POST',
+			body: JSON.stringify({files}),
+		}),
+	gitCommit: (message: string, name?: string, email?: string) =>
+		req<{hash: string}>('/api/git/commit', {
+			method: 'POST',
+			body: JSON.stringify({message, name, email}),
+		}),
+	gitBranches: () => req<{branches: GitBranch[]}>('/api/git/branches'),
+	gitCheckout: (ref: string) =>
+		req<{ok: boolean}>('/api/git/checkout', {
+			method: 'POST',
+			body: JSON.stringify({ref}),
+		}),
 }
 
 function wsBase(): string {
@@ -135,7 +192,9 @@ export function wsUrl(): string {
 }
 
 export function termWsUrl(id: string): string {
-	return withToken(`${wsBase()}/term?id=${encodeURIComponent(id)}`)
+	const t = getToken()
+	const q = `id=${encodeURIComponent(id)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
+	return `${wsBase()}/term?${q}`
 }
 
 export function extToLanguage(filePath: string): string {

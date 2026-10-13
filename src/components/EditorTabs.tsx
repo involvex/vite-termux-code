@@ -1,10 +1,6 @@
-import {Suspense, lazy} from 'react'
 import {api} from '../lib/api'
 import {useAppStore} from '../store/useAppStore'
-
-// CodeMirror is heavy: split it out so the initial bundle stays small.
-// It loads on first file open.
-const CodeEditor = lazy(() => import('./CodeEditor'))
+import Reloadable from './Reloadable'
 
 export default function EditorTabs() {
 	const {
@@ -107,12 +103,23 @@ export default function EditorTabs() {
 				tabIndex={-1}
 			>
 				{active && (
-					<Suspense fallback={<div className="muted">loading editor…</div>}>
-						<CodeEditor
-							key={active.path}
-							filePath={active.path}
-						/>
-					</Suspense>
+					<Reloadable
+						factory={() => import('./CodeEditor')}
+						loading={<div className="muted">loading editor…</div>}
+						failed={retry => (
+							<div className="editor-empty">
+								<p>Editor failed to load (network?).</p>
+								<button
+									className="save-btn"
+									onClick={retry}
+								>
+									Retry
+								</button>
+							</div>
+						)}
+						childKey={active.path}
+						props={{filePath: active.path}}
+					/>
 				)}
 			</div>
 		</div>

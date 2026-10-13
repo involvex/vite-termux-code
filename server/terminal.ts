@@ -1,8 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process'
-import {existsSync} from 'node:fs'
-import path from 'node:path'
 import type {WebSocket} from 'ws'
-import {resolveSafe} from './paths.ts'
+import {findOnPath, resolveSafe} from './paths.ts'
 
 export interface TermInfo {
 	id: string
@@ -26,33 +24,6 @@ interface Session extends TermInfo {
 const MAX_SESSIONS = 8
 const MAX_BUF_CHARS = 200_000
 const CHUNK = 32_000
-
-function findOnPath(cmd: string): string | null {
-	const pathEnv = process.env.PATH ?? ''
-	const lower = cmd.toLowerCase()
-	const exts =
-		process.platform === 'win32'
-			? (process.env.PATHEXT?.split(';') ?? ['.EXE', '.CMD', '.BAT']).map(e =>
-					e.toLowerCase(),
-				)
-			: ['']
-	for (const dir of pathEnv.split(path.delimiter)) {
-		if (!dir) continue
-		const candidates = [cmd]
-		for (const ext of exts) {
-			if (ext && !lower.endsWith(ext)) candidates.push(cmd + ext)
-		}
-		for (const name of candidates) {
-			const p = path.join(dir, name)
-			try {
-				if (existsSync(p)) return p
-			} catch {
-				/* ignore */
-			}
-		}
-	}
-	return null
-}
 
 let idCounter = 0
 function nextId(): string {
