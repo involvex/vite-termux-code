@@ -7,6 +7,7 @@ import EditorTabs from './components/EditorTabs'
 import ExtensionsPanel from './components/ExtensionsPanel'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
+import MarketplacePanel from './components/MarketplacePanel'
 import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
@@ -326,6 +327,16 @@ export default function App() {
 					🧩
 				</button>
 				<button
+					className={`act ${panel === 'marketplace' ? 'active' : ''}`}
+					title="Marketplace"
+					onClick={() => {
+						setPanel('marketplace')
+						setSidebarOpen(true)
+					}}
+				>
+					🏪
+				</button>
+				<button
 					className={`act ${terminalOpen ? 'active' : ''}`}
 					title="Terminal (Ctrl+`)"
 					onClick={() => setTerminalOpen(!terminalOpen)}
@@ -378,6 +389,8 @@ export default function App() {
 						<DebugPanel />
 					) : panel === 'extensions' ? (
 						<ExtensionsPanel />
+					) : panel === 'marketplace' ? (
+						<MarketplacePanel />
 					) : (
 						<GitPanel />
 					)}

@@ -4,7 +4,7 @@
  * UI for configuring an extension's settings based on its configuration contribution.
  */
 
-import {useEffect, useState} from 'react'
+import {useCallback, useEffect, useState} from 'react'
 import type {ConfigurationProperty} from '../lib/extension'
 import {
 	getExtension,
@@ -29,10 +29,7 @@ export default function ExtensionSettings({extensionId, onClose}: Props) {
 	const [loading, setLoading] = useState(true)
 	const [saving, setSaving] = useState(false)
 
-	const loadConfig = () => {
-		useEffect(() => {
-			loadConfig()
-		}, [extensionId, loadConfig])
+	const loadConfig = useCallback(() => {
 		const ext = getExtension(extensionId)
 		if (!ext) {
 			setLoading(false)
@@ -53,7 +50,11 @@ export default function ExtensionSettings({extensionId, onClose}: Props) {
 		}
 		setValues(currentValues)
 		setLoading(false)
-	}
+	}, [extensionId])
+
+	useEffect(() => {
+		loadConfig()
+	}, [loadConfig])
 
 	const handleChange = (key: string, value: any) => {
 		setValues(prev => ({...prev, [key]: value}))

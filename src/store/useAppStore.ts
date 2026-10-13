@@ -19,7 +19,14 @@ export interface OpenTab {
 }
 
 export type Panel =
-	'explorer' | 'search' | 'browser' | 'git' | 'tasks' | 'debug' | 'extensions'
+	| 'explorer'
+	| 'search'
+	| 'browser'
+	| 'git'
+	| 'tasks'
+	| 'debug'
+	| 'extensions'
+	| 'marketplace'
 
 export interface DebugStopped {
 	threadId: number
