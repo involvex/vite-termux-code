@@ -67,13 +67,13 @@ This document outlines potential features and improvements for the td-code edito
 - **Implementation**: Use `@codemirror/view` `drawSelection` or separate minimap component
 - **Alternative**: `codemirror-minimap` package
 
-### 9. File Icons & Tree Customization
-- **Description**: Better file type icons (using `lucide-react` or similar), customizable tree
+### 9. File Icons & Tree Customization ✅ Done
+- **Description**: Better file type icons (zero-dep letter badges), customizable tree
 - **Features**:
-  - Per-extension icons
-  - Git status badges on tree items (M, A, D, U, ?)
-  - Collapse/expand all button
-  - Filter by name (fuzzy) in explorer
+  - Per-extension badges (TS/JS/PY/JSON/MD/HTML/CSS/YAML/RS/GO/...)
+  - Git status badges on tree items (A/D/U/?), dirty dots on folded folders
+  - Expand/collapse all (3-level depth), filter input
+  - Context menu: new file/folder, rename, delete (right-click / long-press)
 
 ### 10. Workspace / Multi-Root Support
 - **Description**: Open multiple folders in one window

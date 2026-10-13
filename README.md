@@ -92,6 +92,10 @@ Notes:
 - PTY size is fixed at spawn (default 80×24 or the requested `cols`/`rows`); the client re-fits its own viewport on resize.
 - The drawer auto-starts one shell when first opened; `+ new` spawns more.
 
+## File Explorer (📁 tab)
+
+File-type badges (TS/JS/PY/JSON/MD/HTML/CSS/YAML/RS/GO/...), git status badges per file (A/D/U/?), and dirty-dot on folded folders that contain changes. Filter input, show-hidden toggle, expand/collapse all (3-level depth), and context actions (new file/folder, rename, delete). Right-click / long-press a file for the menu.
+
 ## Source Control (⎇ tab)
 
 Spawns your real `git` (zero new dependencies — uses your config and credentials; Termux: `pkg install git`). Status, stage/unstage per file or all, inline diffs, commit (with optional inline name/email, or your repo's `user.name`/`user.email`), recent log, branch list + checkout, and a `⎇ branch +N` indicator in the status bar. All file arguments are jailed to the served directory; outside a repo the tab shows a "not a git repository" state.

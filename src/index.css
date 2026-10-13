@@ -261,6 +261,57 @@ body {
 	padding-bottom: 20px;
 }
 
+.tree-filter {
+	margin: 0 10px 4px;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	color: var(--text);
+	border-radius: 6px;
+	padding: 8px 10px;
+	font-size: 13px;
+	min-height: 36px;
+}
+
+.fbadge {
+	display: inline-block;
+	min-width: 30px;
+	text-align: center;
+	font-size: 10px;
+	font-weight: 700;
+	font-family: var(--mono);
+	border-radius: 4px;
+	padding: 1px 3px;
+	background: var(--bg-input);
+	color: var(--text-dim);
+}
+
+.fb-ts { background: #3178c6; color: #fff; }
+.fb-js { background: #f7df1e; color: #323330; }
+.fb-py { background: #3572a5; color: #fff; }
+.fb-json { background: #5b5b5b; color: #ffd700; }
+.fb-md { background: transparent; color: var(--text-dim); }
+.fb-html { background: #e34c26; color: #fff; }
+.fb-css { background: #563d7c; color: #fff; }
+.fb-yml { background: #cb171e; color: #fff; }
+.fb-rs { background: #dea584; color: #000; }
+.fb-go { background: #00add8; color: #fff; }
+.fb-java { background: #b07219; color: #fff; }
+.fb-c { background: #555; color: #fff; }
+.fb-sh { background: transparent; color: var(--text-dim); }
+.fb-sql { background: #e38c00; color: #fff; }
+.fb-lock { background: transparent; color: var(--text-dim); }
+.fb-git { background: #f05032; color: #fff; }
+.fb-docker { background: #2496ed; color: #fff; }
+.fb-doc { background: transparent; color: var(--text-dim); }
+.fb-make { background: #6d6d6d; color: #fff; }
+
+.tree-dirty {
+	color: var(--accent);
+	font-size: 16px;
+	line-height: 1;
+	padding-right: 6px;
+}
+
 .tree,
 .nested {
 	list-style: none;
@@ -887,6 +938,10 @@ body {
 .git-kind.k-U,
 .git-kind.k-\? {
 	color: var(--danger);
+}
+
+.git-kind.k-A {
+	color: var(--success);
 }
 
 .git-path {
