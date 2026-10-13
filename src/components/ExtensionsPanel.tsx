@@ -6,12 +6,14 @@
 
 import {useEffect, useState} from 'react'
 import {
+	getExtensionConfiguration,
 	getInstalledExtensions,
 	installExtension,
 	setExtensionEnabled,
 	uninstallExtension,
 } from '../lib/extensionHost'
 import {useAppStore} from '../store/useAppStore'
+import ExtensionSettings from './ExtensionSettings'
 
 interface ExtensionListItem {
 	id: string
@@ -32,6 +34,9 @@ export default function ExtensionsPanel() {
 	const [installing, setInstalling] = useState(false)
 	const [installUrl, setInstallUrl] = useState('')
 	const [searchQuery, setSearchQuery] = useState('')
+	const [settingsExtensionId, setSettingsExtensionId] = useState<string | null>(
+		null,
+	)
 
 	const refreshExtensions = () => {
 		const exts = getInstalledExtensions()
@@ -237,6 +242,15 @@ export default function ExtensionsPanel() {
 												▶
 											</button>
 										)}
+										{getExtensionConfiguration(ext.id) && (
+											<button
+												className="icon-btn small"
+												onClick={() => setSettingsExtensionId(ext.id)}
+												title="Settings"
+											>
+												⚙
+											</button>
+										)}
 										<button
 											className="icon-btn small"
 											onClick={() => handleUninstall(ext.id)}
@@ -251,6 +265,13 @@ export default function ExtensionsPanel() {
 					</ul>
 				)}
 			</div>
+
+			{settingsExtensionId && (
+				<ExtensionSettings
+					extensionId={settingsExtensionId}
+					onClose={() => setSettingsExtensionId(null)}
+				/>
+			)}
 
 			<div
 				className="muted small"

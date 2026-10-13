@@ -1303,3 +1303,62 @@ body {
 	font-size: 13px;
 	padding: 0;
 }
+
+/* Extension Settings */
+.setting-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 0;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.setting-label {
+	flex: 1;
+	min-width: 0;
+	margin-right: 12px;
+}
+
+.setting-title {
+	display: block;
+	font-weight: 500;
+	font-size: 13px;
+	margin-bottom: 2px;
+}
+
+.setting-description {
+	display: block;
+	font-size: 11px;
+	color: var(--text-dim);
+	line-height: 1.4;
+}
+
+.setting-control {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.setting-control input[type='text'],
+.setting-control input[type='number'],
+.setting-control select,
+.setting-control textarea {
+	min-width: 200px;
+	max-width: 300px;
+}
+
+.settings-form {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.settings-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 10px;
+	border-top: 1px solid var(--border);
+}

@@ -8,6 +8,7 @@
 import type {Extension, ExtensionManifest} from './extension'
 import {
 	createExtensionContext,
+	createExtensionStorage,
 	executeCommand,
 	extensionEvents,
 	getRegisteredCommands,
@@ -331,6 +332,50 @@ export function getInstalledExtensions(): Extension[] {
  */
 export function getExtension(extensionId: string): Extension | undefined {
 	return extensions.get(extensionId)
+}
+
+/**
+ * Get extension configuration contribution
+ */
+export function getExtensionConfiguration(
+	extensionId: string,
+): ExtensionManifest['contributes']['configuration'] | undefined {
+	const ext = extensions.get(extensionId)
+	if (!ext) return undefined
+	return ext.manifest.contributes?.configuration
+}
+
+/**
+ * Get extension configuration value
+ */
+export function getExtensionConfigValue(extensionId: string, key: string): any {
+	const ext = extensions.get(extensionId)
+	if (!ext) return undefined
+	const config = ext.manifest.contributes?.configuration?.properties?.[key]
+	if (!config) return undefined
+	// Try to get from workspace storage first, then global
+	const wsStorage = createExtensionStorage(`${extensionId}.ws`)
+	const globalStorage = createExtensionStorage(`${extensionId}.global`)
+	return wsStorage.get(key) ?? globalStorage.get(key) ?? config.default
+}
+
+/**
+ * Set extension configuration value
+ */
+export function setExtensionConfigValue(
+	extensionId: string,
+	key: string,
+	value: any,
+	scope: 'workspace' | 'global' = 'workspace',
+): void {
+	const ext = extensions.get(extensionId)
+	if (!ext) return
+	const storage =
+		scope === 'workspace'
+			? createExtensionStorage(`${extensionId}.ws`)
+			: createExtensionStorage(`${extensionId}.global`)
+	storage.set(key, value)
+	notifyConfigurationChanged(`${extensionId}.${key}`)
 }
 
 /**

@@ -76,7 +76,7 @@ export const extensionEvents = {
 }
 
 // Storage implementation using localStorage with namespace
-function createExtensionStorage(namespace: string): ExtensionStorage {
+export function createExtensionStorage(namespace: string): ExtensionStorage {
 	const prefix = `td-code-ext:${namespace}:`
 	return {
 		get<T>(key: string): T | undefined {
