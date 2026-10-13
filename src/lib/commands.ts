@@ -99,12 +99,15 @@ async function stageAll(unstage: boolean) {
 	}
 }
 
+const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs']
+
 async function debugStart() {
 	const s = useAppStore.getState()
 	const active = s.tabs.find(t => t.path === s.activePath)
-	const prog = active?.path.endsWith('.py') ? active.path : null
+	const prog =
+		active && DEBUG_EXTS.some(e => active.path.endsWith(e)) ? active.path : null
 	if (!prog) {
-		s.setStatus('open a .py file first, or start from the Debug panel')
+		s.setStatus('open a .py/.js file first, or start from the Debug panel')
 		s.setPanel('debug')
 		s.setSidebarOpen(true)
 		return
@@ -235,7 +238,7 @@ export function allCommands(): Command[] {
 		},
 		{
 			id: 'debug.start',
-			title: 'Debug: Start Debugging Active Python File',
+			title: 'Debug: Start Debugging Active File',
 			run: () => void debugStart(),
 		},
 		{

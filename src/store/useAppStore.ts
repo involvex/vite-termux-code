@@ -26,6 +26,7 @@ export interface DebugStopped {
 
 export interface DebugState {
 	active: boolean
+	adapter: string | null
 	program: string | null
 	stopped: DebugStopped | null
 }
@@ -143,7 +144,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	quickLinks: loadLinks(),
 	gitBranch: null,
 	gitDirty: 0,
-	debug: {active: false, program: null, stopped: null},
+	debug: {active: false, adapter: null, program: null, stopped: null},
 	breakpoints: loadBreakpoints(),
 	debugJump: null,
 	settings: loadSettings(),
@@ -211,7 +212,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	},
 	setGit: (gitBranch, gitDirty) => set({gitBranch, gitDirty}),
 	setDebug: patch => set(s => ({debug: {...s.debug, ...patch}})),
-	resetDebug: () => set({debug: {active: false, program: null, stopped: null}}),
+	resetDebug: () =>
+		set({debug: {active: false, adapter: null, program: null, stopped: null}}),
 	toggleBreakpoint: (path, line) =>
 		set(s => {
 			const cur = s.breakpoints[path] ?? []

@@ -71,6 +71,7 @@ export interface DapStopped {
 
 export interface DapState {
 	active: boolean
+	adapter: string | null
 	program: string | null
 	stopped: DapStopped | null
 	error?: string

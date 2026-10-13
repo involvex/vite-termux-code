@@ -52,7 +52,7 @@ export default function StatusBar() {
 			{debug.active && (
 				<button
 					className="status-term"
-					title={debug.program ?? 'debugging'}
+					title={`${debug.adapter ?? ''} ${debug.program ?? 'debugging'}`}
 					onClick={() => {
 						setPanel('debug')
 						setSidebarOpen(true)

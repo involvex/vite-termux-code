@@ -43,11 +43,13 @@ export default function DebugPanel() {
 	const [error, setError] = useState('')
 	const outRef = useRef<HTMLDivElement>(null)
 
-	// default program = active .py tab
+	// default program = active .py/.js tab
+	const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs']
 	useEffect(() => {
 		if (!program) {
 			const active = tabs.find(t => t.path === activePath)
-			if (active?.path.endsWith('.py')) setProgram(active.path)
+			if (active && DEBUG_EXTS.some(e => active.path.endsWith(e)))
+				setProgram(active.path)
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [activePath])
@@ -163,7 +165,7 @@ export default function DebugPanel() {
 	const start = async () => {
 		const prog = program.trim()
 		if (!prog) {
-			setError('enter a .py program path (relative)')
+			setError('enter a program path (relative .py/.js)')
 			return
 		}
 		setStarting(true)
@@ -300,7 +302,7 @@ export default function DebugPanel() {
 						className="git-input"
 						value={program}
 						onChange={e => setProgram(e.target.value)}
-						placeholder="program (relative .py path)"
+						placeholder="program (relative .py/.js path)"
 						spellCheck={false}
 					/>
 					<button
@@ -311,8 +313,9 @@ export default function DebugPanel() {
 						{starting ? 'Starting…' : '▶ Start debugging'}
 					</button>
 					<div className="muted small">
-						Needs <code>debugpy</code> (<code>pip install debugpy</code>). Click
-						gutter in the editor to set breakpoints first.
+						.py needs <code>debugpy</code> (<code>pip install debugpy</code>
+						). .js needs node + js-debug via <code>TD_CODE_JS_DEBUG</code>.
+						Click the editor gutter to set breakpoints first.
 					</div>
 				</div>
 			) : (
@@ -320,9 +323,9 @@ export default function DebugPanel() {
 					<div className="git-branch-row">
 						<span
 							className="git-branch"
-							title={debug.program ?? ''}
+							title={`${debug.adapter ?? ''} ${debug.program ?? ''}`}
 						>
-							🐞 {debug.program?.split('/').pop()}
+							🐞 [{debug.adapter ?? '?'}] {debug.program?.split('/').pop()}
 						</span>
 						{stopped ? (
 							<span className="git-count">

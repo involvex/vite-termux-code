@@ -12,9 +12,28 @@ export interface DapStopped {
 
 export interface DapState {
 	active: boolean
+	adapter: string | null
 	program: string | null
 	stopped: DapStopped | null
 	error?: string
+}
+
+export interface AdapterDef {
+	/** stable id, reported in status */
+	id: string
+	label: string
+	/** file extensions (lowercase, with dot) this adapter debugs */
+	exts: string[]
+	/** DAP initialize adapterID */
+	adapterID: string
+	/** resolve spawn command; throws {status} with setup instructions */
+	resolve: () => Promise<{cmd: string; args: string[]}>
+	/** DAP launch arguments for a program */
+	launchArgs: (
+		absProgram: string,
+		rootDir: string,
+		opts: {stopOnEntry?: boolean},
+	) => Record<string, unknown>
 }
 
 interface Pending {
@@ -45,7 +64,7 @@ export class DapManager {
 	private initWaiters: {resolve: () => void; reject: (e: Error) => void}[] = []
 	breakpoints = new Map<string, number[]>()
 	readonly rootDir: string
-	state: DapState = {active: false, program: null, stopped: null}
+	state: DapState = {active: false, adapter: null, program: null, stopped: null}
 
 	constructor(rootDir: string) {
 		this.rootDir = rootDir
@@ -56,6 +75,72 @@ export class DapManager {
 	}
 
 	private pythonBin: string | null | undefined
+
+	private adapters: AdapterDef[] = [
+		{
+			id: 'python',
+			label: 'Python (debugpy)',
+			exts: ['.py'],
+			adapterID: 'debugpy',
+			resolve: async () => ({
+				cmd: await this.resolvePython(),
+				// Frozen modules break breakpoints on 3.11+ (debugpy warns).
+				args: ['-Xfrozen_modules=off', '-m', 'debugpy.adapter'],
+			}),
+			launchArgs: (abs, root, opts) => ({
+				program: abs,
+				console: 'internalConsole',
+				justMyCode: true,
+				stopOnEntry: opts.stopOnEntry ?? false,
+				cwd: root,
+			}),
+		},
+		{
+			id: 'node',
+			label: 'Node.js (js-debug)',
+			exts: ['.js', '.mjs', '.cjs'],
+			adapterID: 'pwa-node',
+			resolve: async () => {
+				// Full command line so entries needing a runtime work, e.g.
+				//   TD_CODE_JS_DEBUG="node /opt/js-debug/out/src/dapDebugServer.js"
+				const env = (process.env.TD_CODE_JS_DEBUG ?? '').trim()
+				if (env) {
+					const parts =
+						env.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
+					const cmd = (parts[0] ?? '').replace(/^["']|["']$/g, '')
+					if (!cmd) throw Object.assign(new Error('TD_CODE_JS_DEBUG is empty'), {status: 400})
+					return {
+						cmd,
+						args: parts.slice(1).map(s => s.replace(/^["']|["']$/g, '')),
+					}
+				}
+				const bin = findOnPath('js-debug')
+				if (bin) return {cmd: bin, args: []}
+				throw Object.assign(
+					new Error(
+						'js-debug not found — download js-debug-dap from ' +
+							'microsoft/vscode-js-debug releases (or copy it from a VS Code ' +
+							'install), ensure node is on PATH, and set TD_CODE_JS_DEBUG to ' +
+							'its entry command, e.g. TD_CODE_JS_DEBUG="node /opt/js-debug/dapDebugServer.js"',
+					),
+					{status: 501},
+				)
+			},
+			launchArgs: (abs, root, opts) => ({
+				type: 'pwa-node',
+				request: 'launch',
+				program: abs,
+				cwd: root,
+				console: 'internalConsole',
+				stopOnEntry: opts.stopOnEntry ?? false,
+			}),
+		},
+	]
+
+	private adapterFor(relProgram: string): AdapterDef | null {
+		const lower = relProgram.toLowerCase()
+		return this.adapters.find(a => a.exts.some(e => lower.endsWith(e))) ?? null
+	}
 
 	/** First python on PATH that can import debugpy.adapter (cached). */
 	private async resolvePython(): Promise<string> {
@@ -117,12 +202,11 @@ export class DapManager {
 	}
 
 	/** Spawn a fresh adapter and run the initialize handshake. */
-	private async spawnAdapter(): Promise<void> {
+	private async spawnAdapter(def: AdapterDef): Promise<void> {
 		this.killProc()
-		// Throws 501 with install instructions when nothing qualifies.
-		const bin = await this.resolvePython()
-		// Frozen modules break breakpoints on 3.11+ (debugpy warns); disable them.
-		const proc = spawn(bin, ['-Xfrozen_modules=off', '-m', 'debugpy.adapter'], {
+		// Throws {status} with setup instructions when nothing qualifies.
+		const {cmd, args} = await def.resolve()
+		const proc = spawn(cmd, args, {
 			cwd: this.rootDir,
 			env: {...process.env},
 			stdio: ['pipe', 'pipe', 'pipe'],
@@ -141,7 +225,7 @@ export class DapManager {
 		try {
 			await this.request('initialize', {
 				clientID: 'td-code',
-				adapterID: 'debugpy',
+				adapterID: def.adapterID,
 				linesStartAt1: true,
 				columnsStartAt1: true,
 				pathFormat: 'path',
@@ -161,10 +245,14 @@ export class DapManager {
 		const abs = resolveSafe(this.rootDir, relProgram)
 		if (!abs)
 			throw Object.assign(new Error('program escapes root'), {status: 403})
-		if (!relProgram.endsWith('.py'))
-			throw Object.assign(new Error('only .py programs are supported in v1'), {
-				status: 400,
-			})
+		const def = this.adapterFor(relProgram)
+		if (!def)
+			throw Object.assign(
+				new Error(
+					`no debug adapter for ${relProgram} (supported: .py via debugpy, .js/.mjs/.cjs via js-debug)`,
+				),
+				{status: 400},
+			)
 		const {promises: fs} = await import('node:fs')
 		try {
 			const st = await fs.stat(abs)
@@ -175,8 +263,8 @@ export class DapManager {
 			})
 		}
 
-		await this.spawnAdapter()
-		this.state = {active: true, program: relProgram, stopped: null}
+		await this.spawnAdapter(def)
+		this.state = {active: true, adapter: def.id, program: relProgram, stopped: null}
 
 		const initialized = new Promise<void>((resolve, reject) => {
 			const t = setTimeout(
@@ -197,24 +285,14 @@ export class DapManager {
 		// NOTE: debugpy withholds the `launch` response until the client
 		// finishes configuration (setBreakpoints + configurationDone), so the
 		// launch request must NOT be awaited before the `initialized` event.
-		const launchP = this.request(
-			'launch',
-			{
-				program: abs,
-				console: 'internalConsole',
-				justMyCode: true,
-				stopOnEntry: opts.stopOnEntry ?? false,
-				cwd: this.rootDir,
-			},
-			60000,
-		)
+		const launchP = this.request('launch', def.launchArgs(abs, this.rootDir, opts), 60000)
 		// Surface async launch failures without unhandled rejections.
 		launchP.catch(() => {})
 		try {
 			await initialized
 		} catch (err) {
 			this.killProc()
-			this.state = {active: false, program: null, stopped: null}
+			this.state = {active: false, adapter: null, program: null, stopped: null}
 			throw err
 		}
 		// (Re)apply all known breakpoints, then let the program run.
@@ -287,7 +365,7 @@ export class DapManager {
 
 	async stop(): Promise<void> {
 		const wasActive = this.state.active
-		this.state = {active: false, program: null, stopped: null}
+		this.state = {active: false, adapter: null, program: null, stopped: null}
 		if (this.proc && !this.proc.killed) {
 			try {
 				await this.request('disconnect', {terminateDebuggee: true}, 5000).catch(
@@ -442,7 +520,12 @@ export class DapManager {
 			return
 		}
 		if (event === 'terminated' || event === 'exited') {
-			this.state = {active: false, program: this.state.program, stopped: null}
+			this.state = {
+				active: false,
+				adapter: this.state.adapter,
+				program: this.state.program,
+				stopped: null,
+			}
 			this.broadcast({type: 'event', event, body})
 			return
 		}
@@ -533,6 +616,6 @@ export class DapManager {
 
 	shutdown() {
 		this.killProc()
-		this.state = {active: false, program: null, stopped: null}
+		this.state = {active: false, adapter: null, program: null, stopped: null}
 	}
 }

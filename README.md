@@ -112,11 +112,20 @@ If the server can't start, the editor shows a banner with the error and keeps wo
 
 ## Run and Debug (🐞 tab)
 
-Python debugging via `debugpy` (no native dependencies):
+Python and Node.js debugging (no native dependencies, one session at a time):
 
 ```bash
 pip install debugpy   # Termux: pkg install python && pip install debugpy
 ```
+
+`.py` files use `debugpy` (auto-detected from any python on `PATH`). `.js`/`.mjs`/`.cjs` files use `js-debug`, which is **not** on npm — provide it explicitly:
+
+1. Download `js-debug-dap` from the [microsoft/vscode-js-debug releases](https://github.com/microsoft/vscode-js-debug/releases) (or copy it from a VS Code install), and install node (`pkg install nodejs` on Termux).
+2. Set `TD_CODE_JS_DEBUG` to the full adapter command, e.g.
+   `TD_CODE_JS_DEBUG="node /opt/js-debug/dapDebugServer.js"`.
+   A `js-debug` executable on `PATH` is used as fallback.
+
+Without it, starting a `.js` program fails with setup instructions (verified against the DAP protocol with a mock adapter; real js-debug behavior may vary slightly).
 
 Click the gutter in the editor to set breakpoints (persisted per file), then ▶ Start debugging. The panel shows controls (continue/step over/into/out/pause/stop), call stack with thread switching, scopes + expandable variables, and the program's console output. The stopped line is highlighted in the editor and the view jumps to it. `F5` / `F10` / `F11` step while a session is active. Single active session (v1); only `.py` programs under the served root.
 
