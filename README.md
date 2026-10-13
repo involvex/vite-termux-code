@@ -1,6 +1,7 @@
 # td-code — minimal VSCode-like editor for Termux
 
 [![GitHub Release](https://img.shields.io/github/v/release/involvex/vite-termux-code)](https://github.com/involvex/vite-termux-code/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/bun-%3E%3D1.3-black?logo=bun)](https://bun.sh)
 
 `td-code` serves a directory to a touch-friendly web UI: file browser, CodeMirror editor (highlight, autocomplete, bracket autoclosing), search, and a browser tab (e.g. for opencode running in another Termux session).
