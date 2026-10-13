@@ -1,6 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {api} from '../lib/api'
-import {openAt} from '../lib/nav'
 import {
 	dapClient,
 	type DapFrame,
@@ -8,6 +7,7 @@ import {
 	type DapThread,
 	type DapVariable,
 } from '../lib/dap'
+import {openAt} from '../lib/nav'
 import {useAppStore} from '../store/useAppStore'
 
 interface VarNode {
@@ -23,6 +23,7 @@ function frameLabel(f: DapFrame): string {
 
 export default function DebugPanel() {
 	const {
+		activeWorkspace,
 		debug,
 		setDebug,
 		resetDebug,
@@ -34,6 +35,7 @@ export default function DebugPanel() {
 		setPanel,
 		tabs,
 		activePath,
+		root,
 	} = useAppStore()
 	const [program, setProgram] = useState('')
 	const [starting, setStarting] = useState(false)
@@ -61,16 +63,16 @@ export default function DebugPanel() {
 
 	// initial sync + connect WS
 	useEffect(() => {
-		dapClient.ensureConnected()
+		dapClient.ensureConnected(activeWorkspace)
 		api
-			.dapStatus()
+			.dapStatus(activeWorkspace)
 			.then(s => {
 				if (s.active)
 					setDebug({active: true, program: s.program, stopped: s.stopped})
 			})
 			.catch(() => {})
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [])
+	}, [activeWorkspace])
 
 	const refreshStack = useCallback(async (threadId: number) => {
 		try {
@@ -178,9 +180,13 @@ export default function DebugPanel() {
 		try {
 			// push all known breakpoints before launch; backend also reapplies
 			for (const [p, lines] of Object.entries(breakpoints)) {
-				dapClient.sendBreakpoints(p, lines)
+				dapClient.sendBreakpoints(p, lines, activeWorkspace)
 			}
-			const s = await api.dapStart(prog.replace(/^\//, ''))
+			const s = await api.dapStart(
+				prog.replace(/^\//, ''),
+				false,
+				activeWorkspace,
+			)
 			setDebug({active: true, program: s.program, stopped: null})
 			setOutput([])
 			clearRun()
@@ -194,7 +200,7 @@ export default function DebugPanel() {
 
 	const stop = async () => {
 		try {
-			await api.dapStop()
+			await api.dapStop(activeWorkspace)
 		} catch {
 			/* already dead */
 		}
@@ -247,10 +253,6 @@ export default function DebugPanel() {
 		if (!p) return
 		// Backend already relativizes stopped-frame paths; other frames may
 		// carry absolute paths — strip the served root when present.
-		const root = useAppStore
-			.getState()
-			.root.replace(/\\/g, '/')
-			.replace(/\/+$/, '')
 		const norm = p.replace(/\\/g, '/')
 		let rel: string | null = norm
 		if (root && norm.startsWith(root + '/')) rel = norm.slice(root.length + 1)
@@ -297,10 +299,14 @@ export default function DebugPanel() {
 			const out: Record<string, string> = {}
 			for (const w of watches) {
 				try {
-					const r = await dapClient.request<{result?: string; variablesReference?: number}>(
-						'evaluate',
-						{expression: w, frameId: activeFrame, context: 'watch'},
-					)
+					const r = await dapClient.request<{
+						result?: string
+						variablesReference?: number
+					}>('evaluate', {
+						expression: w,
+						frameId: activeFrame,
+						context: 'watch',
+					})
 					out[w] = (r.result ?? '').slice(0, 300)
 				} catch (e) {
 					out[w] = `! ${e instanceof Error ? e.message : 'error'}`

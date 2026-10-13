@@ -75,10 +75,19 @@ This document outlines potential features and improvements for the td-code edito
   - Expand/collapse all (3-level depth), filter input
   - Context menu: new file/folder, rename, delete (right-click / long-press)
 
-### 10. Workspace / Multi-Root Support
+### 10. Workspace / Multi-Root Support ✅ **DONE**
 - **Description**: Open multiple folders in one window
-- **API changes**: `/api/workspaces` endpoint, modify `resolveSafe` to handle multiple roots
+- **API changes**: `/api/workspaces` endpoint (GET/POST/DELETE), modify `resolveSafe` to handle multiple roots
 - **UI**: Workspace selector in activity bar, combined file tree with root labels
+- **Implementation**: 
+  - Backend: `resolveSafe`, `findRootForPath`, `getRelativePath` in paths.ts handle multiple roots
+  - Server: `/api/workspaces` endpoint for listing/adding/removing workspaces
+  - All file/git/search/task/dap/lsp APIs accept optional `workspace` parameter
+  - File watcher broadcasts changes with root context
+  - Frontend: Zustand store manages `workspaces[]` and `activeWorkspace` index
+  - Activity bar shows workspace dropdown when multiple workspaces exist
+  - FileTree shows each workspace as a collapsible root with label and path
+  - Persisted in localStorage (`td-code-workspaces-v1`)
 
 ---
 

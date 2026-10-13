@@ -52,12 +52,12 @@ export class LspClient {
 		return () => this.handlers.delete(fn)
 	}
 
-	connect() {
+	connect(workspace?: number) {
 		if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1))
 			return
 		let ws: WebSocket
 		try {
-			ws = new WebSocket(lspWsUrl(this.lang))
+			ws = new WebSocket(lspWsUrl(this.lang, workspace))
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'ws failed'
 			return
@@ -102,7 +102,10 @@ export class LspClient {
 			this.ready = false
 			if (this.reconnects < 5) {
 				this.reconnects++
-				setTimeout(() => this.connect(), Math.min(5000, 500 * this.reconnects))
+				setTimeout(
+					() => this.connect(workspace),
+					Math.min(5000, 500 * this.reconnects),
+				)
 			}
 		}
 		ws.onerror = () => {
@@ -118,27 +121,32 @@ export class LspClient {
 		if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(msg))
 	}
 
-	didOpen(path: string, text: string) {
+	didOpen(path: string, text: string, workspace?: number) {
 		this.opened.add(path)
-		this.send({type: 'open', path, text})
+		this.send({type: 'open', path, text, rootDir: workspace})
 	}
 
-	didChange(path: string, text: string) {
+	didChange(path: string, text: string, workspace?: number) {
 		if (!this.opened.has(path)) {
-			this.didOpen(path, text)
+			this.didOpen(path, text, workspace)
 			return
 		}
-		this.send({type: 'change', path, text})
+		this.send({type: 'change', path, text, rootDir: workspace})
 	}
 
-	didClose(path: string) {
+	didClose(path: string, workspace?: number) {
 		this.opened.delete(path)
-		this.send({type: 'close', path})
+		this.send({type: 'close', path, rootDir: workspace})
 	}
 
-	request<T>(method: string, params: unknown, timeoutMs = 8000): Promise<T> {
+	request<T>(
+		method: string,
+		params: unknown,
+		workspace?: number,
+		timeoutMs = 8000,
+	): Promise<T> {
 		const id = nextId++
-		this.send({type: 'request', id, method, params})
+		this.send({type: 'request', id, method, params, rootDir: workspace})
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id)
@@ -169,15 +177,17 @@ export class LspClient {
 	}
 }
 
-const clients = new Map<string, LspClient>()
+const clients = new Map<string, Map<number | undefined, LspClient>>()
 
-export function lspFor(lang: string): LspClient | null {
+export function lspFor(lang: string, workspace?: number): LspClient | null {
 	if (lang !== 'typescript' && lang !== 'javascript') return null
-	let c = clients.get('typescript')
+	const langClients = clients.get('typescript') ?? new Map()
+	let c = langClients.get(workspace)
 	if (!c) {
 		c = new LspClient('typescript')
-		c.connect()
-		clients.set('typescript', c)
+		c.connect(workspace)
+		langClients.set(workspace, c)
+		clients.set('typescript', langClients)
 	}
 	return c
 }

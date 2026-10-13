@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {WebSocketServer, type WebSocket} from 'ws'
+import {DapManager} from './dap.ts'
 import {
 	GitError,
 	gitBranches,
@@ -20,23 +21,27 @@ import {
 	gitStatus,
 	gitUnstage,
 } from './git.ts'
-import {DapManager} from './dap.ts'
 import {LspManager} from './lsp.ts'
 import {lookup as mimeLookup} from './mime.ts'
-import {resolveSafe} from './paths.ts'
+import {findRootForPath, resolveSafe} from './paths.ts'
 import {listTasks, resolveTask} from './tasks.ts'
 import {TermManager} from './terminal.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export interface ServeOptions {
-	rootDir: string
+	rootDirs: string[]
 	port: number
 	host: string
 	authToken: string | null
 	noWatch: boolean
 	noTerms: boolean
 	version: string
+}
+
+export interface Workspace {
+	rootDir: string
+	name: string
 }
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024 // 2MB editable limit
@@ -122,10 +127,64 @@ async function handleApi(
 	if (url.pathname === '/api/health') {
 		return sendJson(res, 200, {
 			ok: true,
-			root: opts.rootDir,
+			roots: opts.rootDirs,
 			version: opts.version,
 			time: Date.now(),
 		})
+	}
+
+	// GET /api/workspaces - list all workspaces
+	if (url.pathname === '/api/workspaces' && method === 'GET') {
+		return sendJson(res, 200, {
+			workspaces: opts.rootDirs.map((rootDir, index) => ({
+				rootDir,
+				name: path.basename(rootDir) || `Workspace ${index + 1}`,
+				index,
+			})),
+		})
+	}
+
+	// POST /api/workspaces - add a new workspace
+	if (url.pathname === '/api/workspaces' && method === 'POST') {
+		let body: {path?: string; name?: string}
+		try {
+			body = JSON.parse(await readBody(req))
+		} catch {
+			return sendJson(res, 400, {error: 'invalid JSON body'})
+		}
+		if (!body.path) return sendJson(res, 400, {error: 'missing path'})
+		const absPath = path.resolve(body.path)
+		try {
+			const st = await fs.stat(absPath)
+			if (!st.isDirectory())
+				return sendJson(res, 400, {error: 'not a directory'})
+		} catch {
+			return sendJson(res, 404, {error: 'directory not found'})
+		}
+		// Check if already exists
+		if (opts.rootDirs.some(r => path.resolve(r) === absPath)) {
+			return sendJson(res, 400, {error: 'workspace already exists'})
+		}
+		opts.rootDirs.push(absPath)
+		// TODO: Add watcher for new root
+		return sendJson(res, 201, {ok: true, rootDir: absPath})
+	}
+
+	// DELETE /api/workspaces/:index - remove a workspace
+	if (url.pathname.startsWith('/api/workspaces/') && method === 'DELETE') {
+		const indexStr = decodeURIComponent(
+			url.pathname.slice('/api/workspaces/'.length),
+		)
+		const index = parseInt(indexStr, 10)
+		if (isNaN(index) || index < 0 || index >= opts.rootDirs.length) {
+			return sendJson(res, 404, {error: 'workspace not found'})
+		}
+		if (opts.rootDirs.length === 1) {
+			return sendJson(res, 400, {error: 'cannot remove last workspace'})
+		}
+		opts.rootDirs.splice(index, 1)
+		// TODO: Remove watcher for removed root
+		return sendJson(res, 200, {ok: true})
 	}
 
 	// --- auth check for everything else under /api ---
@@ -142,7 +201,7 @@ async function handleApi(
 	if (url.pathname === '/api/files' && method === 'GET') {
 		const rel = url.searchParams.get('path') ?? ''
 		const showHidden = url.searchParams.get('hidden') === '1'
-		const abs = resolveSafe(opts.rootDir, rel)
+		const abs = resolveSafe(opts.rootDirs, rel)
 		if (!abs) return sendJson(res, 403, {error: 'path escapes root'})
 		try {
 			const st = await fs.stat(abs)
@@ -151,7 +210,9 @@ async function handleApi(
 		} catch {
 			return sendJson(res, 404, {error: 'directory not found'})
 		}
-		let items = await listDir(abs, opts.rootDir)
+		// Find which root this path belongs to for listDir
+		const root = findRootForPath(opts.rootDirs, abs) ?? opts.rootDirs[0]
+		let items = await listDir(abs, root)
 		if (!showHidden) items = items.filter(i => !i.name.startsWith('.'))
 		return sendJson(res, 200, {path: rel, items})
 	}
@@ -159,7 +220,7 @@ async function handleApi(
 	if (url.pathname === '/api/file' && method === 'GET') {
 		const rel = url.searchParams.get('path') ?? ''
 		if (!rel) return sendJson(res, 400, {error: 'missing ?path='})
-		const abs = resolveSafe(opts.rootDir, rel)
+		const abs = resolveSafe(opts.rootDirs, rel)
 		if (!abs) return sendJson(res, 403, {error: 'path escapes root'})
 		try {
 			const st = await fs.stat(abs)
@@ -197,7 +258,7 @@ async function handleApi(
 			return sendJson(res, 400, {error: 'invalid JSON body'})
 		}
 		if (!body.path) return sendJson(res, 400, {error: 'missing path'})
-		const abs = resolveSafe(opts.rootDir, body.path)
+		const abs = resolveSafe(opts.rootDirs, body.path)
 		if (!abs) return sendJson(res, 403, {error: 'path escapes root'})
 		const content = body.content ?? ''
 		if (Buffer.byteLength(content, 'utf-8') > 5 * 1024 * 1024)
@@ -216,7 +277,7 @@ async function handleApi(
 			path?: string
 		} | null
 		if (!body?.path) return sendJson(res, 400, {error: 'missing path'})
-		const abs = resolveSafe(opts.rootDir, body.path)
+		const abs = resolveSafe(opts.rootDirs, body.path)
 		if (!abs) return sendJson(res, 403, {error: 'path escapes root'})
 		await fs.mkdir(abs, {recursive: true})
 		return sendJson(res, 200, {ok: true})
@@ -229,9 +290,14 @@ async function handleApi(
 		} | null
 		if (!body?.from || !body?.to)
 			return sendJson(res, 400, {error: 'missing from/to'})
-		const a = resolveSafe(opts.rootDir, body.from)
-		const b = resolveSafe(opts.rootDir, body.to)
+		const a = resolveSafe(opts.rootDirs, body.from)
+		const b = resolveSafe(opts.rootDirs, body.to)
 		if (!a || !b) return sendJson(res, 403, {error: 'path escapes root'})
+		// Ensure both paths are under the same root
+		const rootA = findRootForPath(opts.rootDirs, a)
+		const rootB = findRootForPath(opts.rootDirs, b)
+		if (rootA !== rootB)
+			return sendJson(res, 400, {error: 'cannot rename across workspaces'})
 		await fs.mkdir(path.dirname(b), {recursive: true})
 		await fs.rename(a, b)
 		return sendJson(res, 200, {ok: true})
@@ -251,10 +317,13 @@ async function handleApi(
 			}
 		}
 		if (!target) return sendJson(res, 400, {error: 'missing path'})
-		const abs = resolveSafe(opts.rootDir, target)
+		const abs = resolveSafe(opts.rootDirs, target)
 		if (!abs) return sendJson(res, 403, {error: 'path escapes root'})
-		if (path.resolve(abs) === path.resolve(opts.rootDir))
-			return sendJson(res, 400, {error: 'refusing to delete root'})
+		// Prevent removing a root directory
+		for (const root of opts.rootDirs) {
+			if (path.resolve(abs) === path.resolve(root))
+				return sendJson(res, 400, {error: 'refusing to delete workspace root'})
+		}
 		await fs.rm(abs, {recursive: true, force: true})
 		return sendJson(res, 200, {ok: true})
 	}
@@ -264,8 +333,15 @@ async function handleApi(
 		if (!q || q.length < 2)
 			return sendJson(res, 400, {error: 'query too short (min 2 chars)'})
 		const relBase = url.searchParams.get('path') ?? ''
-		const base = resolveSafe(opts.rootDir, relBase)
-		if (!base) return sendJson(res, 403, {error: 'path escapes root'})
+		// If path is specified, search only in that workspace; otherwise search all
+		let roots: string[]
+		if (relBase) {
+			const base = resolveSafe(opts.rootDirs, relBase)
+			if (!base) return sendJson(res, 403, {error: 'path escapes root'})
+			roots = [findRootForPath(opts.rootDirs, base) ?? opts.rootDirs[0]]
+		} else {
+			roots = opts.rootDirs
+		}
 		const results: Array<{file: string; line: number; preview: string}> = []
 		const skipDirs = new Set([
 			'node_modules',
@@ -274,7 +350,7 @@ async function handleApi(
 			'.hg',
 			'__pycache__',
 		])
-		async function walk(dir: string) {
+		async function walk(dir: string, root: string) {
 			if (results.length >= MAX_SEARCH_RESULTS) return
 			let entries: import('node:fs').Dirent[]
 			try {
@@ -290,7 +366,7 @@ async function handleApi(
 				if (skipDirs.has(e.name)) continue
 				const full = path.join(dir, e.name)
 				if (e.isDirectory()) {
-					await walk(full)
+					await walk(full, root)
 				} else if (e.isFile()) {
 					try {
 						const st = await fs.stat(full)
@@ -302,10 +378,7 @@ async function handleApi(
 							const idx = lines[i].toLowerCase().indexOf(q.toLowerCase())
 							if (idx !== -1) {
 								results.push({
-									file: path
-										.relative(opts.rootDir, full)
-										.split(path.sep)
-										.join('/'),
+									file: path.relative(root, full).split(path.sep).join('/'),
 									line: i + 1,
 									preview: lines[i].slice(0, 240),
 								})
@@ -314,10 +387,7 @@ async function handleApi(
 									results.filter(
 										r =>
 											r.file ===
-											path
-												.relative(opts.rootDir, full)
-												.split(path.sep)
-												.join('/'),
+											path.relative(root, full).split(path.sep).join('/'),
 									).length > 10
 								)
 									break
@@ -329,7 +399,10 @@ async function handleApi(
 				}
 			}
 		}
-		await walk(base)
+		for (const root of roots) {
+			await walk(root, root)
+			if (results.length >= MAX_SEARCH_RESULTS) break
+		}
 		return sendJson(res, 200, {query: q, count: results.length, results})
 	}
 
@@ -375,8 +448,11 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/git/status' && method === 'GET') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
-			return sendJson(res, 200, await gitStatus(opts.rootDir))
+			return sendJson(res, 200, await gitStatus(workspaceRoot))
 		} catch (err) {
 			// friendly empty state for the Source Control tab
 			if (
@@ -391,29 +467,38 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/git/log' && method === 'GET') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const limit = Number(url.searchParams.get('limit') ?? 20)
-			return sendJson(res, 200, {commits: await gitLog(opts.rootDir, limit)})
+			return sendJson(res, 200, {commits: await gitLog(workspaceRoot, limit)})
 		} catch (err) {
 			return gitErr(res, err)
 		}
 	}
 
 	if (url.pathname === '/api/git/diff' && method === 'GET') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const file = url.searchParams.get('file') ?? ''
 			const staged = url.searchParams.get('staged') === '1'
 			if (!file) return sendJson(res, 400, {error: 'missing ?file='})
-			return sendJson(res, 200, await gitDiff(opts.rootDir, file, staged))
+			return sendJson(res, 200, await gitDiff(workspaceRoot, file, staged))
 		} catch (err) {
 			return gitErr(res, err)
 		}
 	}
 
 	if (url.pathname === '/api/git/stage' && method === 'POST') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const body = JSON.parse(await readBody(req)) as {files?: string[]}
-			await gitStage(opts.rootDir, body.files ?? [])
+			await gitStage(workspaceRoot, body.files ?? [])
 			return sendJson(res, 200, {ok: true})
 		} catch (err) {
 			return gitErr(res, err)
@@ -421,9 +506,12 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/git/unstage' && method === 'POST') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const body = JSON.parse(await readBody(req)) as {files?: string[]}
-			await gitUnstage(opts.rootDir, body.files ?? [])
+			await gitUnstage(workspaceRoot, body.files ?? [])
 			return sendJson(res, 200, {ok: true})
 		} catch (err) {
 			return gitErr(res, err)
@@ -431,6 +519,9 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/git/commit' && method === 'POST') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const body = JSON.parse(await readBody(req)) as {
 				message?: string
@@ -441,7 +532,7 @@ async function handleApi(
 				res,
 				200,
 				await gitCommit(
-					opts.rootDir,
+					workspaceRoot,
 					body.message ?? '',
 					body.name,
 					body.email,
@@ -453,17 +544,23 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/git/branches' && method === 'GET') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
-			return sendJson(res, 200, {branches: await gitBranches(opts.rootDir)})
+			return sendJson(res, 200, {branches: await gitBranches(workspaceRoot)})
 		} catch (err) {
 			return gitErr(res, err)
 		}
 	}
 
 	if (url.pathname === '/api/git/checkout' && method === 'POST') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			const body = JSON.parse(await readBody(req)) as {ref?: string}
-			await gitCheckout(opts.rootDir, body.ref ?? '')
+			await gitCheckout(workspaceRoot, body.ref ?? '')
 			return sendJson(res, 200, {ok: true})
 		} catch (err) {
 			return gitErr(res, err)
@@ -471,8 +568,11 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/tasks' && method === 'GET') {
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
-			return sendJson(res, 200, await listTasks(opts.rootDir))
+			return sendJson(res, 200, await listTasks(workspaceRoot))
 		} catch (err) {
 			return sendJson(res, 500, {
 				error: err instanceof Error ? err.message : 'failed to list tasks',
@@ -490,12 +590,15 @@ async function handleApi(
 			return sendJson(res, 400, {error: 'invalid JSON body'})
 		}
 		if (!body.id) return sendJson(res, 400, {error: 'missing id'})
-		const task = await resolveTask(opts.rootDir, body.id)
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
+		const task = await resolveTask(workspaceRoot, body.id)
 		if (!task) return sendJson(res, 404, {error: 'unknown task'})
 		if (task.id.startsWith('missing:'))
 			return sendJson(res, 400, {error: 'no bun/npm on PATH'})
 		try {
-			const info = terms.create({})
+			const info = terms.create({cwd: workspaceRoot})
 			// Small delay lets the shell print its prompt first so the
 			// command doesn't get lost in spawn races on slow devices.
 			setTimeout(() => terms.input(info.id, `${task.command}\n`), 250)
@@ -512,7 +615,10 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/lsp/status' && method === 'GET') {
-		return sendJson(res, 200, {langs: lsp.status()})
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
+		return sendJson(res, 200, {langs: lsp.status(workspaceRoot)})
 	}
 
 	if (url.pathname === '/api/lsp/ensure' && method === 'POST') {
@@ -523,8 +629,11 @@ async function handleApi(
 			return sendJson(res, 400, {error: 'invalid JSON body'})
 		}
 		const lang = body.lang ?? 'typescript'
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
-			await lsp.ensure(lang)
+			await lsp.ensure(lang, workspaceRoot)
 			return sendJson(res, 200, {ok: true, lang})
 		} catch (err) {
 			const status =
@@ -538,7 +647,10 @@ async function handleApi(
 	}
 
 	if (url.pathname === '/api/dap/status' && method === 'GET') {
-		return sendJson(res, 200, dap.status())
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
+		return sendJson(res, 200, dap.status(workspaceRoot))
 	}
 
 	if (url.pathname === '/api/dap/start' && method === 'POST') {
@@ -549,11 +661,17 @@ async function handleApi(
 			return sendJson(res, 400, {error: 'invalid JSON body'})
 		}
 		if (!body.program) return sendJson(res, 400, {error: 'missing program'})
+		const workspaceRoot = url.searchParams.get('workspace')
+			? opts.rootDirs[parseInt(url.searchParams.get('workspace')!, 10)]
+			: opts.rootDirs[0]
 		try {
 			return sendJson(
 				res,
 				200,
-				await dap.start(body.program, {stopOnEntry: body.stopOnEntry}),
+				await dap.start(body.program, {
+					stopOnEntry: body.stopOnEntry,
+					rootDir: workspaceRoot,
+				}),
 			)
 		} catch (err) {
 			const status =
@@ -561,7 +679,8 @@ async function handleApi(
 					? ((err as {status: number}).status as number)
 					: 400
 			return sendJson(res, status, {
-				error: err instanceof Error ? err.message : 'failed to start debug session',
+				error:
+					err instanceof Error ? err.message : 'failed to start debug session',
 			})
 		}
 	}
@@ -642,9 +761,9 @@ export function lanIps(): string[] {
 
 export async function startServer(opts: ServeOptions): Promise<void> {
 	const distDir = path.resolve(__dirname, '../dist')
-	const terms = opts.noTerms ? null : new TermManager(opts.rootDir)
-	const lsp = new LspManager(opts.rootDir)
-	const dap = new DapManager(opts.rootDir)
+	const terms = opts.noTerms ? null : new TermManager(opts.rootDirs)
+	const lsp = new LspManager(opts.rootDirs)
+	const dap = new DapManager(opts.rootDirs)
 	const server = createServer(async (req, res) => {
 		try {
 			const host = req.headers.host ?? `localhost:${opts.port}`
@@ -686,7 +805,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		}
 		clients.add(ws)
 		ws.on('close', () => clients.delete(ws))
-		ws.send(JSON.stringify({type: 'hello', root: opts.rootDir}))
+		ws.send(JSON.stringify({type: 'hello', roots: opts.rootDirs}))
 	})
 
 	// WebSocket for interactive terminals
@@ -769,13 +888,15 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	let watcher: FSWatcher | null = null
 	if (!opts.noWatch) {
 		try {
-			watcher = watch(opts.rootDir, {
+			watcher = watch(opts.rootDirs, {
 				ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**'],
 				ignoreInitial: true,
 			})
 			const broadcast = (type: string, p: string) => {
-				const rel = path.relative(opts.rootDir, p).split(path.sep).join('/')
-				const msg = JSON.stringify({type, path: rel})
+				const root = findRootForPath(opts.rootDirs, p)
+				if (!root) return
+				const rel = path.relative(root, p).split(path.sep).join('/')
+				const msg = JSON.stringify({type, path: rel, root})
 				for (const c of clients) {
 					if (c.readyState === 1) c.send(msg)
 				}
@@ -796,7 +917,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	})
 
 	const ips = opts.host === '0.0.0.0' ? lanIps() : []
-	console.log(`\n  td-code v${opts.version} serving ${opts.rootDir}`)
+	console.log(
+		`\n  td-code v${opts.version} serving ${opts.rootDirs.join(', ')}`,
+	)
 	console.log(
 		`  Local:  http://localhost:${opts.port}/` +
 			(opts.authToken ? `?token=${opts.authToken}` : ''),

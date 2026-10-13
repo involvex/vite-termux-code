@@ -20,6 +20,7 @@ interface LangServer {
 	openDocs: Map<string, number>
 	initialized: boolean
 	startError?: string
+	rootDir: string
 }
 
 function uriFor(rootDir: string, relPath: string): string {
@@ -45,28 +46,74 @@ function relFromUri(rootDir: string, uri: string): string {
 	}
 }
 
-export class LspManager {
-	private servers = new Map<string, LangServer>()
-	private sockets = new Map<string, Set<WebSocket>>()
-	readonly rootDir: string
+/** Find which root a path belongs to */
+function findRootForPath(rootDirs: string[], absPath: string): string | null {
+	const normalized = path.resolve(absPath)
+	for (const root of rootDirs) {
+		const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep
+		if (normalized === root || normalized.startsWith(rootWithSep)) {
+			return root
+		}
+	}
+	return null
+}
 
-	constructor(rootDir: string) {
-		this.rootDir = rootDir
+export class LspManager {
+	private servers = new Map<string, Map<string, LangServer>>() // lang -> rootDir -> LangServer
+	private sockets = new Map<string, Set<WebSocket>>() // lang -> Set<WebSocket>
+	readonly rootDirs: string[]
+
+	constructor(rootDirs: string | string[]) {
+		this.rootDirs = Array.isArray(rootDirs) ? rootDirs : [rootDirs]
 	}
 
 	supported(): string[] {
 		return ['typescript', 'javascript']
 	}
 
-	status(): {lang: string; running: boolean; error?: string}[] {
-		return this.supported().map(lang => {
-			const s = this.servers.get(lang)
-			return {
-				lang,
-				running: Boolean(s?.proc && !s.proc.killed && s.initialized),
-				...(s?.startError ? {error: s.startError} : {}),
+	status(
+		rootDir?: string,
+	): {lang: string; running: boolean; error?: string; rootDir?: string}[] {
+		if (rootDir) {
+			// Status for a specific root
+			const out: {
+				lang: string
+				running: boolean
+				error?: string
+				rootDir?: string
+			}[] = []
+			for (const lang of this.supported()) {
+				const rootMap = this.servers.get(lang)
+				const s = rootMap?.get(rootDir)
+				out.push({
+					lang,
+					running: Boolean(s?.proc && !s.proc.killed && s.initialized),
+					rootDir,
+					...(s?.startError ? {error: s.startError} : {}),
+				})
 			}
-		})
+			return out
+		}
+		// Status for all roots
+		const out: {
+			lang: string
+			running: boolean
+			error?: string
+			rootDir?: string
+		}[] = []
+		for (const lang of this.supported()) {
+			const rootMap = this.servers.get(lang)
+			if (!rootMap) continue
+			for (const [root, s] of rootMap) {
+				out.push({
+					lang,
+					running: Boolean(s?.proc && !s.proc.killed && s.initialized),
+					rootDir: root,
+					...(s?.startError ? {error: s.startError} : {}),
+				})
+			}
+		}
+		return out
 	}
 
 	/** Resolve how to launch typescript-language-server. Returns null when unavailable. */
@@ -94,8 +141,10 @@ export class LspManager {
 		return null
 	}
 
-	async ensure(lang: string): Promise<LangServer> {
-		const existing = this.servers.get(lang)
+	async ensure(lang: string, rootDir?: string): Promise<LangServer> {
+		const targetRoot = rootDir ?? this.rootDirs[0]
+		const rootMap = this.servers.get(lang) ?? new Map()
+		const existing = rootMap.get(targetRoot)
 		if (existing?.proc && !existing.proc.killed) return existing
 		if (lang !== 'typescript' && lang !== 'javascript') {
 			throw Object.assign(new Error(`unsupported language: ${lang}`), {
@@ -112,7 +161,7 @@ export class LspManager {
 			)
 		}
 		const proc = spawn(launch.cmd, launch.args, {
-			cwd: this.rootDir,
+			cwd: targetRoot,
 			env: {...process.env},
 			stdio: ['pipe', 'pipe', 'pipe'],
 		})
@@ -123,8 +172,10 @@ export class LspManager {
 			pending: new Map(),
 			openDocs: new Map(),
 			initialized: false,
+			rootDir: targetRoot,
 		}
-		this.servers.set(lang, srv)
+		rootMap.set(targetRoot, srv)
+		this.servers.set(lang, rootMap)
 		proc.stdout?.on('data', d => this.onData(lang, srv, Buffer.from(d)))
 		proc.stderr?.on('data', d => {
 			const msg = d.toString('utf-8').slice(0, 500)
@@ -147,9 +198,9 @@ export class LspManager {
 			srv.initialized = false
 		})
 		try {
-			await this.request(lang, 'initialize', {
+			await this.request(lang, targetRoot, 'initialize', {
 				processId: process.pid,
-				rootUri: pathToFileURL(this.rootDir).toString(),
+				rootUri: pathToFileURL(targetRoot).toString(),
 				capabilities: {
 					textDocument: {
 						hover: {contentFormat: ['markdown', 'plaintext']},
@@ -158,7 +209,7 @@ export class LspManager {
 					},
 				},
 			})
-			this.notify(lang, 'initialized', {})
+			this.notify(lang, targetRoot, 'initialized', {})
 			srv.initialized = true
 		} catch (err) {
 			srv.startError = err instanceof Error ? err.message : String(err)
@@ -175,22 +226,25 @@ export class LspManager {
 		])
 	}
 
-	private send(lang: string, msg: unknown) {
-		const srv = this.servers.get(lang)
+	private send(lang: string, rootDir: string, msg: unknown) {
+		const rootMap = this.servers.get(lang)
+		const srv = rootMap?.get(rootDir)
 		srv?.proc.stdin?.write(this.frame(msg))
 	}
 
-	notify(lang: string, method: string, params: unknown) {
-		this.send(lang, {jsonrpc: '2.0', method, params})
+	notify(lang: string, rootDir: string, method: string, params: unknown) {
+		this.send(lang, rootDir, {jsonrpc: '2.0', method, params})
 	}
 
 	request(
 		lang: string,
+		rootDir: string,
 		method: string,
 		params: unknown,
 		timeoutMs = 8000,
 	): Promise<unknown> {
-		const srv = this.servers.get(lang)
+		const rootMap = this.servers.get(lang)
+		const srv = rootMap?.get(rootDir)
 		if (!srv?.proc || srv.proc.killed)
 			return Promise.reject(new Error('language server not running'))
 		const id = srv.nextId++
@@ -200,35 +254,53 @@ export class LspManager {
 				reject(new Error(`lsp timeout: ${method}`))
 			}, timeoutMs)
 			srv.pending.set(id, {resolve, reject, timer})
-			this.send(lang, {jsonrpc: '2.0', id, method, params})
+			this.send(lang, rootDir, {jsonrpc: '2.0', id, method, params})
 		})
 	}
 
-	didOpen(lang: string, relPath: string, text: string) {
-		const srv = this.servers.get(lang)
-		const uri = uriFor(this.rootDir, relPath)
+	didOpen(lang: string, relPath: string, text: string, rootDir?: string) {
+		const targetRoot =
+			rootDir ??
+			findRootForPath(this.rootDirs, path.resolve(relPath)) ??
+			this.rootDirs[0]
+		const rootMap = this.servers.get(lang)
+		const srv = rootMap?.get(targetRoot)
+		const uri = uriFor(targetRoot, relPath)
 		const version = (srv?.openDocs.get(uri) ?? 0) + 1
 		srv?.openDocs.set(uri, version)
-		this.notify(lang, 'textDocument/didOpen', {
+		this.notify(lang, targetRoot, 'textDocument/didOpen', {
 			textDocument: {uri, languageId: 'typescript', version, text},
 		})
 	}
 
-	didChange(lang: string, relPath: string, text: string) {
-		const srv = this.servers.get(lang)
-		const uri = uriFor(this.rootDir, relPath)
+	didChange(lang: string, relPath: string, text: string, rootDir?: string) {
+		const targetRoot =
+			rootDir ??
+			findRootForPath(this.rootDirs, path.resolve(relPath)) ??
+			this.rootDirs[0]
+		const rootMap = this.servers.get(lang)
+		const srv = rootMap?.get(targetRoot)
+		const uri = uriFor(targetRoot, relPath)
 		const version = (srv?.openDocs.get(uri) ?? 0) + 1
 		srv?.openDocs.set(uri, version)
-		this.notify(lang, 'textDocument/didChange', {
+		this.notify(lang, targetRoot, 'textDocument/didChange', {
 			textDocument: {uri, version},
 			contentChanges: [{text}],
 		})
 	}
 
-	didClose(lang: string, relPath: string) {
-		const uri = uriFor(this.rootDir, relPath)
-		this.servers.get(lang)?.openDocs.delete(uri)
-		this.notify(lang, 'textDocument/didClose', {textDocument: {uri}})
+	didClose(lang: string, relPath: string, rootDir?: string) {
+		const targetRoot =
+			rootDir ??
+			findRootForPath(this.rootDirs, path.resolve(relPath)) ??
+			this.rootDirs[0]
+		const rootMap = this.servers.get(lang)
+		const srv = rootMap?.get(targetRoot)
+		const uri = uriFor(targetRoot, relPath)
+		srv?.openDocs.delete(uri)
+		this.notify(lang, targetRoot, 'textDocument/didClose', {
+			textDocument: {uri},
+		})
 	}
 
 	private onData(lang: string, srv: LangServer, chunk: Buffer) {
@@ -298,7 +370,8 @@ export class LspManager {
 			this.broadcast(lang, {
 				type: 'diagnostics',
 				uri: params.uri,
-				path: relFromUri(this.rootDir, params.uri),
+				path: relFromUri(srv.rootDir, params.uri),
+				rootDir: srv.rootDir,
 				diagnostics: params.diagnostics ?? [],
 			})
 		}
@@ -327,6 +400,7 @@ export class LspManager {
 				params?: unknown
 				path?: string
 				text?: string
+				rootDir?: string
 			}
 			try {
 				msg = JSON.parse(raw.toString())
@@ -335,28 +409,30 @@ export class LspManager {
 			}
 			void (async () => {
 				try {
+					const targetRoot = msg.rootDir ?? this.rootDirs[0]
 					if (msg.type === 'open' && typeof msg.path === 'string') {
-						await this.ensure(lang)
-						this.didOpen(lang, msg.path, msg.text ?? '')
+						await this.ensure(lang, targetRoot)
+						this.didOpen(lang, msg.path, msg.text ?? '', targetRoot)
 						this.sendWs(ws, {type: 'opened', path: msg.path})
 					} else if (msg.type === 'change' && typeof msg.path === 'string') {
-						this.didChange(lang, msg.path, msg.text ?? '')
+						this.didChange(lang, msg.path, msg.text ?? '', targetRoot)
 					} else if (msg.type === 'close' && typeof msg.path === 'string') {
-						this.didClose(lang, msg.path)
+						this.didClose(lang, msg.path, targetRoot)
 					} else if (
 						msg.type === 'request' &&
 						msg.method &&
 						typeof msg.id === 'number'
 					) {
-						await this.ensure(lang)
+						await this.ensure(lang, targetRoot)
 						const result = await this.request(
 							lang,
+							targetRoot,
 							msg.method,
 							msg.params ?? {},
 						)
 						this.sendWs(ws, {type: 'response', id: msg.id, result, error: null})
 					} else if (msg.type === 'ensure') {
-						await this.ensure(lang)
+						await this.ensure(lang, targetRoot)
 						this.sendWs(ws, {type: 'ready', lang})
 					}
 				} catch (err) {
@@ -372,7 +448,8 @@ export class LspManager {
 			})()
 		})
 		// Best-effort: report current status immediately
-		const s = this.servers.get(lang)
+		const rootMap = this.servers.get(lang)
+		const s = rootMap?.get(this.rootDirs[0])
 		this.sendWs(ws, {
 			type: 'hello',
 			lang,
@@ -400,11 +477,13 @@ export class LspManager {
 	}
 
 	shutdown() {
-		for (const [, srv] of this.servers) {
-			try {
-				srv.proc.kill('SIGTERM')
-			} catch {
-				/* ignore */
+		for (const [, rootMap] of this.servers) {
+			for (const [, srv] of rootMap) {
+				try {
+					srv.proc.kill('SIGTERM')
+				} catch {
+					/* ignore */
+				}
 			}
 		}
 		this.servers.clear()

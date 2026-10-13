@@ -59,12 +59,12 @@ class DapClient {
 		return () => this.handlers.delete(fn)
 	}
 
-	connect() {
+	connect(workspace?: number) {
 		if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1))
 			return
 		let ws: WebSocket
 		try {
-			ws = new WebSocket(dapWsUrl())
+			ws = new WebSocket(dapWsUrl(workspace))
 		} catch {
 			return
 		}
@@ -107,17 +107,25 @@ class DapClient {
 		}
 	}
 
-	ensureConnected() {
-		this.connect()
+	ensureConnected(workspace?: number) {
+		this.connect(workspace)
 	}
 
 	sendBreakpoints(
 		path: string,
 		bps: {line: number; condition?: string; hitCondition?: string}[],
+		workspace?: number,
 	) {
-		this.connect()
+		this.connect(workspace)
 		if (this.ws?.readyState === 1) {
-			this.ws.send(JSON.stringify({type: 'breakpoints', path, breakpoints: bps}))
+			this.ws.send(
+				JSON.stringify({
+					type: 'breakpoints',
+					path,
+					breakpoints: bps,
+					rootDir: workspace,
+				}),
+			)
 		}
 	}
 

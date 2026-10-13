@@ -42,7 +42,6 @@ import {
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {extToLanguage} from '../lib/api'
 import {dapClient} from '../lib/dap'
-import type {Bp} from '../store/useAppStore'
 import {
 	lspFor,
 	offsetToPos,
@@ -52,6 +51,7 @@ import {
 	type LspDiagnostic,
 } from '../lib/lsp'
 import {themeById} from '../lib/themes'
+import type {Bp} from '../store/useAppStore'
 import {useAppStore} from '../store/useAppStore'
 
 function langExtension(filePath: string) {
@@ -111,27 +111,40 @@ class BpMarker extends GutterMarker {
 	}
 }
 
-function syncBpField(filePath: string, view: EditorView) {
-	const bps = useAppStore.getState().breakpoints[filePath] ?? []
+function syncBpField(filePath: string, view: EditorView, workspace?: number) {
+	const key = workspace !== undefined ? `${workspace}:${filePath}` : filePath
+	const bps = useAppStore.getState().breakpoints[key] ?? []
 	view.dispatch({effects: setBpsEffect.of(bps)})
 	// live-update a running session; backend stores them regardless
-	dapClient.sendBreakpoints(filePath, bps)
+	dapClient.sendBreakpoints(filePath, bps, workspace)
 }
 
-function toggleBp(filePath: string, view: EditorView, line: number) {
+function toggleBp(
+	filePath: string,
+	view: EditorView,
+	line: number,
+	workspace?: number,
+) {
 	const {breakpoints, setBreakpoints} = useAppStore.getState()
-	const cur = breakpoints[filePath] ?? []
+	const key = workspace !== undefined ? `${workspace}:${filePath}` : filePath
+	const cur = breakpoints[key] ?? []
 	const next = cur.some(b => b.line === line)
 		? cur.filter(b => b.line !== line)
 		: [...cur, {line}].sort((a, b) => a.line - b.line)
-	setBreakpoints(filePath, next)
-	syncBpField(filePath, view)
+	setBreakpoints(filePath, next, workspace)
+	syncBpField(filePath, view, workspace)
 }
 
 /** Alt+Click a breakpoint: edit condition / hit condition (empty clears). */
-function editBpCond(filePath: string, view: EditorView, line: number) {
+function editBpCond(
+	filePath: string,
+	view: EditorView,
+	line: number,
+	workspace?: number,
+) {
 	const {breakpoints, setBreakpointCond, setStatus} = useAppStore.getState()
-	const cur = breakpoints[filePath]?.find(b => b.line === line)
+	const key = workspace !== undefined ? `${workspace}:${filePath}` : filePath
+	const cur = breakpoints[key]?.find(b => b.line === line)
 	if (!cur) {
 		setStatus(`set a breakpoint on line ${line} first (click the gutter)`)
 		return
@@ -149,8 +162,8 @@ function editBpCond(filePath: string, view: EditorView, line: number) {
 	const c = condition.trim()
 	const h = hitCondition.trim()
 	// empty strings clear that part; clearing both keeps a plain breakpoint
-	setBreakpointCond(filePath, line, {condition: c, hitCondition: h})
-	syncBpField(filePath, view)
+	setBreakpointCond(filePath, line, {condition: c, hitCondition: h}, workspace)
+	syncBpField(filePath, view, workspace)
 	setStatus(
 		c || h
 			? `conditional breakpoint ${filePath}:${line}`
@@ -158,7 +171,7 @@ function editBpCond(filePath: string, view: EditorView, line: number) {
 	)
 }
 
-function bpGutterExt(filePath: string) {
+function bpGutterExt(filePath: string, workspace?: number) {
 	return gutter({
 		class: 'bp-gutter',
 		markers: v => {
@@ -179,8 +192,9 @@ function bpGutterExt(filePath: string) {
 		domEventHandlers: {
 			mousedown(view, line, event) {
 				const ln = view.state.doc.lineAt(line.from).number
-				if ((event as MouseEvent).altKey) editBpCond(filePath, view, ln)
-				else toggleBp(filePath, view, ln)
+				if ((event as MouseEvent).altKey)
+					editBpCond(filePath, view, ln, workspace)
+				else toggleBp(filePath, view, ln, workspace)
 				return true
 			},
 		},
@@ -245,6 +259,7 @@ function lspMarkdownToText(v: unknown): string {
 async function gotoDefinition(
 	view: EditorView,
 	filePath: string,
+	workspace?: number,
 ): Promise<boolean> {
 	const client = lspFor('typescript')
 	if (!client) return false
@@ -252,10 +267,14 @@ async function gotoDefinition(
 	const doc = view.state.doc.toString()
 	const pos = offsetToPos(doc, view.state.selection.main.head)
 	try {
-		const res = (await client.request('textDocument/definition', {
-			textDocument: {uri: toUri(root, filePath)},
-			position: pos,
-		})) as
+		const res = (await client.request(
+			'textDocument/definition',
+			{
+				textDocument: {uri: toUri(root, filePath)},
+				position: pos,
+			},
+			workspace,
+		)) as
 			| {uri: string; range: {start: {line: number; character: number}}}
 			| {uri: string; range: {start: {line: number; character: number}}}[]
 			| null
@@ -282,13 +301,14 @@ async function gotoDefinition(
 		if (targetPath && targetPath !== filePath) {
 			try {
 				const {api} = await import('../lib/api')
-				const data = await api.read(targetPath)
+				const data = await api.read(targetPath, workspace)
 				if (!data.binary) {
 					openTab({
 						path: targetPath,
 						content: data.content ?? '',
 						savedContent: data.content ?? '',
 						mtime: data.mtime,
+						workspace,
 					})
 					setActive(targetPath)
 					setStatus(`definition: ${targetPath}`)
@@ -318,6 +338,7 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 	const {tabs, updateTab, settings, debug, debugJump} = useAppStore()
 	const tab = tabs.find(t => t.path === filePath)
 	const [lspError, setLspError] = useState('')
+	const tabWorkspace = tab?.workspace
 
 	const initialDoc = useMemo(() => tab?.content ?? '', [filePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -329,13 +350,14 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 		const useLsp = isTs(filePath) && !readOnly
 		const client = useLsp ? lspFor(extToLanguage(filePath)) : null
 		if (client) {
-			client.didOpen(filePath, initialDoc)
+			client.didOpen(filePath, initialDoc, tabWorkspace)
 			const off = client.onMessage(msg => {
 				const m = msg as {
 					type?: string
 					path?: string
 					diagnostics?: LspDiagnostic[]
 					error?: unknown
+					rootDir?: string
 				}
 				if (m.type === 'diagnostics' && m.path === filePath) {
 					const cur = viewRef.current?.state.doc.toString() ?? initialDoc
@@ -354,7 +376,7 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 			if (!client) return
 			if (changeTimer.current !== null) window.clearTimeout(changeTimer.current)
 			changeTimer.current = window.setTimeout(() => {
-				client.didChange(filePath, text)
+				client.didChange(filePath, text, tabWorkspace)
 			}, 500)
 		}
 
@@ -372,10 +394,14 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 			const doc = view.state.doc.toString()
 			const position = offsetToPos(doc, pos)
 			try {
-				const res = (await client.request('textDocument/hover', {
-					textDocument: {uri: toUri(useAppStore.getState().root, filePath)},
-					position,
-				})) as {contents?: unknown} | null
+				const res = (await client.request(
+					'textDocument/hover',
+					{
+						textDocument: {uri: toUri(useAppStore.getState().root, filePath)},
+						position,
+					},
+					tabWorkspace,
+				)) as {contents?: unknown} | null
 				if (!res?.contents) return null
 				const raw = Array.isArray(res.contents)
 					? res.contents.map(lspMarkdownToText).join('\n')
@@ -405,10 +431,14 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 			const before = doc.slice(Math.max(0, ctx.pos - 2), ctx.pos)
 			if (!/[A-Za-z0-9_$.]$/.test(before)) return null
 			try {
-				const res = (await client.request('textDocument/completion', {
-					textDocument: {uri: toUri(useAppStore.getState().root, filePath)},
-					position,
-				})) as {items: LspCompletionItem[]} | LspCompletionItem[] | null
+				const res = (await client.request(
+					'textDocument/completion',
+					{
+						textDocument: {uri: toUri(useAppStore.getState().root, filePath)},
+						position,
+					},
+					tabWorkspace,
+				)) as {items: LspCompletionItem[]} | LspCompletionItem[] | null
 				const items = Array.isArray(res) ? res : (res?.items ?? [])
 				if (!items.length) return null
 				return {
@@ -451,23 +481,26 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 					{
 						key: 'F12',
 						run: view => {
-							void gotoDefinition(view, filePath)
+							void gotoDefinition(view, filePath, tabWorkspace)
 							return true
 						},
 					},
 				]),
 				langExtension(filePath),
 				themeById(settings.theme).cm === 'oneDark' ? oneDark : [],
-				bpField.init(
-					() =>
-						new Map(
-							(useAppStore.getState().breakpoints[filePath] ?? []).map(b => [
-								b.line,
-								b,
-							]),
-						),
-				),
-				...(readOnly ? [] : [bpGutterExt(filePath)]),
+				bpField.init(() => {
+					const key =
+						tabWorkspace !== undefined
+							? `${tabWorkspace}:${filePath}`
+							: filePath
+					return new Map(
+						(useAppStore.getState().breakpoints[key] ?? []).map(b => [
+							b.line,
+							b,
+						]),
+					)
+				}),
+				...(readOnly ? [] : [bpGutterExt(filePath, tabWorkspace)]),
 				curLineDeco,
 				settings.wordWrap ? EditorView.lineWrapping : [],
 				indentUnit.of(
@@ -478,7 +511,7 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 					mousedown: (e, view) => {
 						if ((e.ctrlKey || e.metaKey) && useLsp) {
 							e.preventDefault()
-							void gotoDefinition(view, filePath)
+							void gotoDefinition(view, filePath, tabWorkspace)
 							return true
 						}
 						return false
@@ -546,7 +579,9 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 		const view = viewRef.current
 		if (!view) return
 		const want =
-			debug.stopped && debug.stopped.file === filePath ? (debug.stopped.line ?? null) : null
+			debug.stopped && debug.stopped.file === filePath
+				? (debug.stopped.line ?? null)
+				: null
 		try {
 			if (view.state.field(curField, false) !== want) {
 				view.dispatch({effects: setCurEffect.of(want)})

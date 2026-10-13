@@ -3,7 +3,7 @@ import {api, type TaskDef} from '../lib/api'
 import {useAppStore} from '../store/useAppStore'
 
 export default function TasksPanel() {
-	const {setStatus, setTerminalOpen} = useAppStore()
+	const {activeWorkspace, setStatus, setTerminalOpen} = useAppStore()
 	const [tasks, setTasks] = useState<TaskDef[]>([])
 	const [runners, setRunners] = useState<{
 		bun: string | null
@@ -22,7 +22,7 @@ export default function TasksPanel() {
 		setLoading(true)
 		setError('')
 		try {
-			const r = await api.tasks()
+			const r = await api.tasks(activeWorkspace)
 			setTasks(r.tasks)
 			setRunners(r.runners)
 		} catch (e) {
@@ -30,7 +30,7 @@ export default function TasksPanel() {
 		} finally {
 			setLoading(false)
 		}
-	}, [])
+	}, [activeWorkspace])
 
 	useEffect(() => {
 		void refresh()
@@ -40,7 +40,7 @@ export default function TasksPanel() {
 		if (t.id.startsWith('missing:')) return
 		setRunning(t.id)
 		try {
-			const r = await api.runTask(t.id)
+			const r = await api.runTask(t.id, activeWorkspace)
 			setStatus(`running ${r.task.command} in terminal`)
 			setTerminalOpen(true)
 		} catch (e) {

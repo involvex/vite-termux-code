@@ -3,7 +3,7 @@ import {api, type GitBranch, type GitCommit, type GitStatus} from '../lib/api'
 import {useAppStore} from '../store/useAppStore'
 
 export default function GitPanel() {
-	const {setStatus, setGit} = useAppStore()
+	const {activeWorkspace, setStatus, setGit} = useAppStore()
 	const [status, setStatusState] = useState<GitStatus | null>(null)
 	const [commits, setCommits] = useState<GitCommit[]>([])
 	const [branches, setBranches] = useState<GitBranch[]>([])
@@ -20,7 +20,7 @@ export default function GitPanel() {
 		setLoading(true)
 		setError('')
 		try {
-			const s = await api.gitStatus()
+			const s = await api.gitStatus(activeWorkspace)
 			setStatusState(s)
 			if (s.repo) {
 				const dirty =
@@ -28,7 +28,10 @@ export default function GitPanel() {
 					(s.unstaged?.length ?? 0) +
 					(s.untracked?.length ?? 0)
 				setGit(s.branch ?? null, dirty)
-				const [log, br] = await Promise.all([api.gitLog(15), api.gitBranches()])
+				const [log, br] = await Promise.all([
+					api.gitLog(15, activeWorkspace),
+					api.gitBranches(activeWorkspace),
+				])
 				setCommits(log.commits)
 				setBranches(br.branches)
 			} else {
@@ -41,7 +44,7 @@ export default function GitPanel() {
 		} finally {
 			setLoading(false)
 		}
-	}, [setGit, setStatus])
+	}, [activeWorkspace, setGit, setStatus])
 
 	useEffect(() => {
 		void refresh()
@@ -71,7 +74,7 @@ export default function GitPanel() {
 		}
 		setLoadingDiff(key)
 		try {
-			const d = await api.gitDiff(file, staged)
+			const d = await api.gitDiff(file, staged, activeWorkspace)
 			setExpanded(prev => ({
 				...prev,
 				[key]:
@@ -95,6 +98,7 @@ export default function GitPanel() {
 				message.trim(),
 				name.trim() || undefined,
 				email.trim() || undefined,
+				activeWorkspace,
 			)
 			setMessage('')
 			setError('')
@@ -110,7 +114,7 @@ export default function GitPanel() {
 
 	const checkout = async (ref: string) => {
 		if (!ref) return
-		await mutate(() => api.gitCheckout(ref), 'checkout')
+		await mutate(() => api.gitCheckout(ref, activeWorkspace), 'checkout')
 	}
 
 	if (loading && !status)
@@ -182,7 +186,11 @@ export default function GitPanel() {
 						actionLabel="unstage all"
 						onAction={() =>
 							void mutate(
-								() => api.gitUnstage((status.staged ?? []).map(f => f.path)),
+								() =>
+									api.gitUnstage(
+										(status.staged ?? []).map(f => f.path),
+										activeWorkspace,
+									),
 								'unstage',
 							)
 						}
@@ -195,7 +203,10 @@ export default function GitPanel() {
 								button="+"
 								buttonTitle="Unstage"
 								onButton={() =>
-									void mutate(() => api.gitUnstage([f.path]), 'unstage')
+									void mutate(
+										() => api.gitUnstage([f.path], activeWorkspace),
+										'unstage',
+									)
 								}
 								onDiff={() => void toggleDiff(f.path, true)}
 								diff={expanded[`s:${f.path}`]}
@@ -210,10 +221,13 @@ export default function GitPanel() {
 						onAction={() =>
 							void mutate(
 								() =>
-									api.gitStage([
-										...(status.unstaged ?? []).map(f => f.path),
-										...(status.untracked ?? []),
-									]),
+									api.gitStage(
+										[
+											...(status.unstaged ?? []).map(f => f.path),
+											...(status.untracked ?? []),
+										],
+										activeWorkspace,
+									),
 								'stage',
 							)
 						}
@@ -226,7 +240,10 @@ export default function GitPanel() {
 								button="+"
 								buttonTitle="Stage"
 								onButton={() =>
-									void mutate(() => api.gitStage([f.path]), 'stage')
+									void mutate(
+										() => api.gitStage([f.path], activeWorkspace),
+										'stage',
+									)
 								}
 								onDiff={() => void toggleDiff(f.path, false)}
 								diff={expanded[`u:${f.path}`]}
@@ -240,7 +257,9 @@ export default function GitPanel() {
 								path={p}
 								button="+"
 								buttonTitle="Stage"
-								onButton={() => void mutate(() => api.gitStage([p]), 'stage')}
+								onButton={() =>
+									void mutate(() => api.gitStage([p], activeWorkspace), 'stage')
+								}
 								onDiff={undefined}
 								diff={undefined}
 								diffLoading={false}

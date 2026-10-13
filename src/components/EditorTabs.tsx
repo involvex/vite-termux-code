@@ -13,13 +13,13 @@ export default function EditorTabs() {
 		setStatus,
 	} = useAppStore()
 
-	const save = async (path: string) => {
+	const save = async (path: string, workspace?: number) => {
 		const tab = tabs.find(t => t.path === path)
 		if (!tab || tab.binary || tab.truncated) return
 		if (tab.content === tab.savedContent) return
 		setSaving(true)
 		try {
-			const res = await api.save(path, tab.content)
+			const res = await api.save(path, tab.content, workspace)
 			updateTab(path, {savedContent: tab.content, mtime: res.mtime})
 			setStatus(`saved ${path}`)
 		} catch (e) {
@@ -50,7 +50,7 @@ export default function EditorTabs() {
 				onKeyDown={e => {
 					if ((e.ctrlKey || e.metaKey) && e.key === 's') {
 						e.preventDefault()
-						if (active) void save(active.path)
+						if (active) void save(active.path, active.workspace)
 					}
 				}}
 			>
@@ -91,7 +91,7 @@ export default function EditorTabs() {
 					<button
 						className="save-btn"
 						disabled={active.content === active.savedContent}
-						onClick={() => void save(active.path)}
+						onClick={() => void save(active.path, active.workspace)}
 						title="Save (Ctrl+S)"
 					>
 						Save

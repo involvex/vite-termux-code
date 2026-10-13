@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useState} from 'react'
-import {api, type FileItem} from '../lib/api'
+import {api, type FileItem, type Workspace} from '../lib/api'
 import {fileBadge} from '../lib/icons'
 import {useAppStore} from '../store/useAppStore'
 
@@ -17,12 +17,19 @@ const EXPAND_SKIP = new Set([
 ])
 
 export default function FileTree() {
-	const {showHidden, setShowHidden, openTab, setStatus, gitDirty, gitBranch} =
-		useAppStore()
-	const [root, setRoot] = useState<FileItem[]>([])
-	const [expanded, setExpanded] = useState<Record<string, FileItem[]>>({
-		'|': [],
-	})
+	const {
+		workspaces,
+		activeWorkspace,
+		setActiveWorkspace,
+		showHidden,
+		setShowHidden,
+		openTab,
+		setStatus,
+		gitDirty,
+		gitBranch,
+	} = useAppStore()
+
+	const [expanded, setExpanded] = useState<Record<string, FileItem[]>>({'': []})
 	const [openDirs, setOpenDirs] = useState<Set<string>>(new Set(['']))
 	const [loading, setLoading] = useState(false)
 	const [error, setError] = useState('')
@@ -31,12 +38,11 @@ export default function FileTree() {
 	const [dirDirty, setDirDirty] = useState<Set<string>>(new Set())
 
 	const loadDir = useCallback(
-		async (dirPath: string) => {
+		async (dirPath: string, wsIndex?: number) => {
 			setLoading(true)
 			try {
-				const res = await api.list(dirPath, showHidden)
+				const res = await api.list(dirPath, showHidden, wsIndex)
 				setExpanded(prev => ({...prev, [dirPath]: res.items}))
-				if (dirPath === '') setRoot(res.items)
 				setError('')
 				return res.items
 			} catch (e) {
@@ -50,15 +56,15 @@ export default function FileTree() {
 	)
 
 	useEffect(() => {
-		void loadDir('')
+		void loadDir('', activeWorkspace)
 		// reload all open dirs when hidden toggle changes
-		for (const d of openDirs) void loadDir(d)
+		for (const d of openDirs) void loadDir(d, activeWorkspace)
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [showHidden])
+	}, [showHidden, activeWorkspace])
 
-	const refreshGit = useCallback(async () => {
+	const refreshGit = useCallback(async (wsIndex?: number) => {
 		try {
-			const s = await api.gitStatus()
+			const s = await api.gitStatus(wsIndex)
 			if (!s.repo) {
 				setGitMap({})
 				setDirDirty(new Set())
@@ -92,25 +98,25 @@ export default function FileTree() {
 	// refresh badges on mount, on manual refresh, and whenever the
 	// Source Control tab reports a new dirty count / branch
 	useEffect(() => {
-		void refreshGit()
-	}, [refreshGit, gitDirty, gitBranch])
+		void refreshGit(activeWorkspace)
+	}, [refreshGit, gitDirty, gitBranch, activeWorkspace])
 
-	const toggle = (dirPath: string) => {
+	const toggle = (dirPath: string, wsIndex?: number) => {
 		setOpenDirs(prev => {
 			const next = new Set(prev)
 			if (next.has(dirPath)) next.delete(dirPath)
 			else {
 				next.add(dirPath)
-				void loadDir(dirPath)
+				void loadDir(dirPath, wsIndex)
 			}
 			return next
 		})
 	}
 
-	const openFile = async (item: FileItem) => {
+	const openFile = async (item: FileItem, wsIndex?: number) => {
 		try {
 			setStatus(`opening ${item.path}…`)
-			const data = await api.read(item.path)
+			const data = await api.read(item.path, wsIndex)
 			if (data.binary) {
 				openTab({
 					path: item.path,
@@ -118,6 +124,7 @@ export default function FileTree() {
 					savedContent: '',
 					mtime: data.mtime,
 					binary: true,
+					workspace: wsIndex,
 				})
 			} else {
 				openTab({
@@ -126,6 +133,7 @@ export default function FileTree() {
 					savedContent: data.content ?? '',
 					mtime: data.mtime,
 					truncated: data.truncated,
+					workspace: wsIndex,
 				})
 			}
 			setStatus(data.truncated ? 'large file: read-only preview' : 'ready')
@@ -135,14 +143,14 @@ export default function FileTree() {
 	}
 
 	const refresh = () => {
-		for (const d of openDirs) void loadDir(d)
-		void loadDir('')
-		void refreshGit()
+		for (const d of openDirs) void loadDir(d, activeWorkspace)
+		void loadDir('', activeWorkspace)
+		void refreshGit(activeWorkspace)
 	}
 
 	const collapseAll = () => {
 		setOpenDirs(new Set(['']))
-		void loadDir('')
+		void loadDir('', activeWorkspace)
 	}
 
 	const expandAll = async () => {
@@ -155,7 +163,9 @@ export default function FileTree() {
 			while (queue.length > 0 && count < 60) {
 				const cur = queue.shift()
 				if (!cur || cur.d >= 3) continue
-				const res = await api.list(cur.p, showHidden).catch(() => null)
+				const res = await api
+					.list(cur.p, showHidden, activeWorkspace)
+					.catch(() => null)
 				if (!res) continue
 				next[cur.p] = res.items
 				opened.add(cur.p)
@@ -172,7 +182,6 @@ export default function FileTree() {
 			}
 			setExpanded(prev => ({...prev, ...next}))
 			setOpenDirs(opened)
-			if (next['']) setRoot(next[''])
 			setError('')
 		} catch (e) {
 			setError(e instanceof Error ? e.message : 'expand failed')
@@ -181,7 +190,7 @@ export default function FileTree() {
 		}
 	}
 
-	const createEntry = async (kind: 'file' | 'dir') => {
+	const createEntry = async (kind: 'file' | 'dir', wsIndex?: number) => {
 		const name = window.prompt(
 			kind === 'file'
 				? 'New file path (relative):'
@@ -189,8 +198,8 @@ export default function FileTree() {
 		)
 		if (!name) return
 		try {
-			if (kind === 'file') await api.save(name.replace(/^\//, ''), '')
-			else await api.mkdir(name.replace(/^\//, ''))
+			if (kind === 'file') await api.save(name.replace(/^\//, ''), '', wsIndex)
+			else await api.mkdir(name.replace(/^\//, ''), wsIndex)
 			refresh()
 			setStatus('created')
 		} catch (e) {
@@ -198,21 +207,21 @@ export default function FileTree() {
 		}
 	}
 
-	const renameEntry = async (item: FileItem) => {
+	const renameEntry = async (item: FileItem, wsIndex?: number) => {
 		const to = window.prompt('Rename to (relative path):', item.path)
 		if (!to || to === item.path) return
 		try {
-			await api.rename(item.path, to)
+			await api.rename(item.path, to, wsIndex)
 			refresh()
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'rename failed')
 		}
 	}
 
-	const deleteEntry = async (item: FileItem) => {
+	const deleteEntry = async (item: FileItem, wsIndex?: number) => {
 		if (!window.confirm(`Delete ${item.path}?`)) return
 		try {
-			await api.remove(item.path)
+			await api.remove(item.path, wsIndex)
 			refresh()
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'delete failed')
@@ -230,97 +239,149 @@ export default function FileTree() {
 		return false
 	}
 
-	const renderItems = (items: FileItem[], depth: number) => (
-		<ul className={depth === 0 ? 'tree' : 'tree nested'}>
-			{items.map(item => {
-				const isDir = item.type === 'dir'
-				if (!matches(item) && !(isDir && dirHasMatch(item.path, 0))) return null
-				const isOpen = openDirs.has(item.path)
-				const children = expanded[item.path] ?? []
-				const badge = !isDir ? fileBadge(item.name) : null
-				const mark = !isDir ? gitMap[item.path] : undefined
-				const dirty = isDir && dirDirty.has(item.path)
-				return (
-					<li key={item.path}>
-						<div
-							className="tree-row"
-							style={{paddingLeft: 8 + depth * 14}}
-							onClick={() => (isDir ? toggle(item.path) : void openFile(item))}
-							onContextMenu={e => {
-								e.preventDefault()
-								const action = window.prompt(
-									`Actions for ${item.path}:\n1=rename  2=delete  3=new file here  4=new folder here`,
-									'1',
-								)
-								if (action === '1') void renameEntry(item)
-								else if (action === '2') void deleteEntry(item)
-								else if (action === '3') {
-									const n = window.prompt(
-										'New file name:',
-										`${item.type === 'dir' ? item.path : item.path.split('/').slice(0, -1).join('/')}/untitled.txt`,
-									)
-									if (n) void api.save(n, '').then(refresh)
-								} else if (action === '4') {
-									const n = window.prompt(
-										'New folder name:',
-										`${item.path}/new-folder`,
-									)
-									if (n) void api.mkdir(n).then(refresh)
+	// Render a single workspace tree
+	const renderWorkspace = (ws: Workspace, index: number, isActive: boolean) => {
+		const items = expanded[''] ?? []
+		const wsRootName =
+			ws.name || ws.rootDir.split(/[/\\]/).pop() || `Workspace ${index + 1}`
+
+		const renderItems = (items: FileItem[], depth: number) => (
+			<ul className={depth === 0 ? 'tree' : 'tree nested'}>
+				{items.map(item => {
+					const isDir = item.type === 'dir'
+					if (!matches(item) && !(isDir && dirHasMatch(item.path, 0)))
+						return null
+					const isOpen = openDirs.has(item.path)
+					const children = expanded[item.path] ?? []
+					const badge = !isDir ? fileBadge(item.name) : null
+					const mark = !isDir ? gitMap[item.path] : undefined
+					const dirty = isDir && dirDirty.has(item.path)
+					return (
+						<li key={`${index}:${item.path}`}>
+							<div
+								className="tree-row"
+								style={{paddingLeft: 8 + depth * 14}}
+								onClick={() =>
+									isDir ? toggle(item.path, index) : void openFile(item, index)
 								}
-							}}
-						>
-							<span className="tree-icon">
-								{isDir ? (
-									isOpen ? (
-										'📂'
-									) : (
-										'📁'
+								onContextMenu={e => {
+									e.preventDefault()
+									const action = window.prompt(
+										`Actions for ${item.path}:\n1=rename  2=delete  3=new file here  4=new folder here`,
+										'1',
 									)
-								) : badge ? (
-									<span
-										className={`fbadge ${badge.className}`}
-										title={item.name}
-									>
-										{badge.text}
-									</span>
-								) : (
-									'📄'
-								)}
-							</span>
-							<span
-								className="tree-name"
-								title={mark ? `${item.path} (${mark.title})` : item.path}
+									if (action === '1') void renameEntry(item, index)
+									else if (action === '2') void deleteEntry(item, index)
+									else if (action === '3') {
+										const n = window.prompt(
+											'New file name:',
+											`${item.type === 'dir' ? item.path : item.path.split('/').slice(0, -1).join('/')}/untitled.txt`,
+										)
+										if (n) void api.save(n, '', index).then(refresh)
+									} else if (action === '4') {
+										const n = window.prompt(
+											'New folder name:',
+											`${item.path}/new-folder`,
+										)
+										if (n) void api.mkdir(n, index).then(refresh)
+									}
+								}}
 							>
-								{item.name}
-							</span>
-							{mark && (
-								<span
-									className={`git-kind k-${mark.letter}`}
-									title={mark.title}
-								>
-									{mark.letter}
+								<span className="tree-icon">
+									{isDir ? (
+										isOpen ? (
+											'📂'
+										) : (
+											'📁'
+										)
+									) : badge ? (
+										<span
+											className={`fbadge ${badge.className}`}
+											title={item.name}
+										>
+											{badge.text}
+										</span>
+									) : (
+										'📄'
+									)}
 								</span>
-							)}
-							{dirty && (
 								<span
-									className="tree-dirty"
-									title="contains changes"
+									className="tree-name"
+									title={mark ? `${item.path} (${mark.title})` : item.path}
 								>
-									•
+									{item.name}
 								</span>
-							)}
-						</div>
-						{isDir && isOpen && renderItems(children, depth + 1)}
-					</li>
-				)
-			})}
-		</ul>
-	)
+								{mark && (
+									<span
+										className={`git-kind k-${mark.letter}`}
+										title={mark.title}
+									>
+										{mark.letter}
+									</span>
+								)}
+								{dirty && (
+									<span
+										className="tree-dirty"
+										title="contains changes"
+									>
+										•
+									</span>
+								)}
+							</div>
+							{isDir && isOpen && renderItems(children, depth + 1)}
+						</li>
+					)
+				})}
+			</ul>
+		)
+
+		return (
+			<div className="workspace-root">
+				<div
+					className={`tree-row workspace-header ${isActive ? 'active' : ''}`}
+					onClick={() => setActiveWorkspace(index)}
+					style={{paddingLeft: 8, fontWeight: isActive ? 600 : 400}}
+				>
+					<span className="tree-icon">📦</span>
+					<span
+						className="tree-name"
+						title={ws.rootDir}
+					>
+						{wsRootName}
+					</span>
+					<span className="workspace-path muted small">{ws.rootDir}</span>
+				</div>
+				{isActive && renderItems(items, 0)}
+			</div>
+		)
+	}
 
 	return (
 		<div className="panel-col">
 			<div className="panel-toolbar">
 				<span className="panel-title">Explorer</span>
+				<button
+					className="icon-btn"
+					title="Add workspace folder"
+					onClick={async () => {
+						const path = window.prompt('Enter workspace folder path:')
+						if (path) {
+							try {
+								await api.addWorkspace(path)
+								await api.workspaces().then(ws => {
+									useAppStore.getState().setWorkspaces(ws.workspaces)
+								})
+								setStatus('workspace added')
+							} catch (e) {
+								setStatus(
+									e instanceof Error ? e.message : 'add workspace failed',
+								)
+							}
+						}
+					}}
+				>
+					+📦
+				</button>
 				<button
 					className="icon-btn"
 					title="Refresh"
@@ -345,14 +406,14 @@ export default function FileTree() {
 				<button
 					className="icon-btn"
 					title="New file"
-					onClick={() => void createEntry('file')}
+					onClick={() => void createEntry('file', activeWorkspace)}
 				>
 					+📄
 				</button>
 				<button
 					className="icon-btn"
 					title="New folder"
-					onClick={() => void createEntry('dir')}
+					onClick={() => void createEntry('dir', activeWorkspace)}
 				>
 					+📁
 				</button>
@@ -375,7 +436,9 @@ export default function FileTree() {
 			{loading && <div className="muted">loading…</div>}
 			{error && <div className="error">{error}</div>}
 			<div className="tree-wrap">
-				{renderItems(root.length ? root : (expanded[''] ?? []), 0)}
+				{workspaces.map((ws, i) =>
+					renderWorkspace(ws, i, i === activeWorkspace),
+				)}
 			</div>
 			<div className="muted small">
 				long-press / right-click a file for rename/delete

@@ -34,12 +34,17 @@ function nextId(): string {
 export class TermManager {
 	private sessions = new Map<string, Session>()
 	private scriptBin: string | null | undefined
-	readonly rootDir: string
+	readonly rootDirs: string[]
 	readonly maxSessions: number
 
-	constructor(rootDir: string, maxSessions = MAX_SESSIONS) {
-		this.rootDir = rootDir
+	constructor(rootDirs: string | string[], maxSessions = MAX_SESSIONS) {
+		this.rootDirs = Array.isArray(rootDirs) ? rootDirs : [rootDirs]
 		this.maxSessions = maxSessions
+	}
+
+	/** @deprecated Use rootDirs instead */
+	get rootDir(): string {
+		return this.rootDirs[0]
 	}
 
 	/** Path to script(1) if a real PTY can be allocated, else null. Cached. */
@@ -78,7 +83,7 @@ export class TermManager {
 				},
 			)
 		}
-		const abs = resolveSafe(this.rootDir, opts.cwd ?? '')
+		const abs = resolveSafe(this.rootDirs, opts.cwd ?? '')
 		if (!abs) throw Object.assign(new Error('cwd escapes root'), {status: 403})
 		let shell = (opts.shell ?? '').trim() || this.defaultShell()
 		if (shell.includes('/') || shell.includes('\\')) {

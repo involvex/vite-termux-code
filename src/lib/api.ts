@@ -75,6 +75,7 @@ export interface DapState {
 	program: string | null
 	stopped: DapStopped | null
 	error?: string
+	rootDir?: string
 }
 
 export interface TaskDef {
@@ -84,6 +85,12 @@ export interface TaskDef {
 	script: string
 	command: string
 	detail?: string
+}
+
+export interface Workspace {
+	rootDir: string
+	name: string
+	index: number
 }
 
 function getToken(): string {
@@ -126,38 +133,67 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 	return (await res.json()) as T
 }
 
+function withWorkspace(path: string, workspace?: number): string {
+	if (workspace !== undefined) {
+		const sep = path.includes('?') ? '&' : '?'
+		return `${path}${sep}workspace=${workspace}`
+	}
+	return path
+}
+
 export const api = {
 	health: () =>
-		req<{ok: boolean; root: string; version: string}>('/api/health'),
-	list: (dirPath = '', hidden = false) =>
+		req<{ok: boolean; roots: string[]; version: string}>('/api/health'),
+	workspaces: () => req<{workspaces: Workspace[]}>('/api/workspaces'),
+	addWorkspace: (rootDir: string, name?: string) =>
+		req<{ok: boolean; rootDir: string}>('/api/workspaces', {
+			method: 'POST',
+			body: JSON.stringify({path: rootDir, name}),
+		}),
+	removeWorkspace: (index: number) =>
+		req<{ok: boolean}>(`/api/workspaces/${index}`, {
+			method: 'DELETE',
+		}),
+	list: (dirPath = '', hidden = false, workspace?: number) =>
 		req<{path: string; items: FileItem[]}>(
-			`/api/files?path=${encodeURIComponent(dirPath)}&hidden=${hidden ? '1' : '0'}`,
+			withWorkspace(
+				`/api/files?path=${encodeURIComponent(dirPath)}&hidden=${hidden ? '1' : '0'}`,
+				workspace,
+			),
 		),
-	read: (filePath: string) =>
-		req<FileContent>(`/api/file?path=${encodeURIComponent(filePath)}`),
-	save: (filePath: string, content: string) =>
-		req<{ok: boolean; mtime: number}>('/api/file', {
+	read: (filePath: string, workspace?: number) =>
+		req<FileContent>(
+			withWorkspace(
+				`/api/file?path=${encodeURIComponent(filePath)}`,
+				workspace,
+			),
+		),
+	save: (filePath: string, content: string, workspace?: number) =>
+		req<{ok: boolean; mtime: number}>(withWorkspace('/api/file', workspace), {
 			method: 'POST',
 			body: JSON.stringify({path: filePath, content}),
 		}),
-	mkdir: (dirPath: string) =>
-		req<{ok: boolean}>('/api/mkdir', {
+	mkdir: (dirPath: string, workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/mkdir', workspace), {
 			method: 'POST',
 			body: JSON.stringify({path: dirPath}),
 		}),
-	rename: (from: string, to: string) =>
-		req<{ok: boolean}>('/api/rename', {
+	rename: (from: string, to: string, workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/rename', workspace), {
 			method: 'POST',
 			body: JSON.stringify({from, to}),
 		}),
-	remove: (target: string) =>
-		req<{ok: boolean}>('/api/remove', {
+	remove: (target: string, workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/remove', workspace), {
 			method: 'POST',
 			body: JSON.stringify({path: target}),
 		}),
-	search: (q: string, base = '') =>
+	search: (q: string, base = '', workspace?: number) =>
 		req<{query: string; count: number; results: SearchHit[]}>(
-			`/api/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(base)}`,
+			withWorkspace(
+				`/api/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(base)}`,
+				workspace,
+			),
 		),
 	terms: () => req<{terms: TermSession[]; ptyAvailable: boolean}>('/api/terms'),
 	createTerm: (
@@ -171,60 +207,87 @@ export const api = {
 		req<{ok: boolean}>(`/api/terms/${encodeURIComponent(id)}`, {
 			method: 'DELETE',
 		}),
-	gitStatus: () => req<GitStatus>('/api/git/status'),
-	gitLog: (limit = 15) =>
-		req<{commits: GitCommit[]}>(`/api/git/log?limit=${limit}`),
-	gitDiff: (file: string, staged: boolean) =>
-		req<{diff: string; truncated: boolean}>(
-			`/api/git/diff?file=${encodeURIComponent(file)}&staged=${staged ? '1' : '0'}`,
+	gitStatus: (workspace?: number) =>
+		req<GitStatus>(withWorkspace('/api/git/status', workspace)),
+	gitLog: (limit = 15, workspace?: number) =>
+		req<{commits: GitCommit[]}>(
+			withWorkspace(`/api/git/log?limit=${limit}`, workspace),
 		),
-	gitStage: (files: string[]) =>
-		req<{ok: boolean}>('/api/git/stage', {
+	gitDiff: (file: string, staged: boolean, workspace?: number) =>
+		req<{diff: string; truncated: boolean}>(
+			withWorkspace(
+				`/api/git/diff?file=${encodeURIComponent(file)}&staged=${staged ? '1' : '0'}`,
+				workspace,
+			),
+		),
+	gitStage: (files: string[], workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/git/stage', workspace), {
 			method: 'POST',
 			body: JSON.stringify({files}),
 		}),
-	gitUnstage: (files: string[]) =>
-		req<{ok: boolean}>('/api/git/unstage', {
+	gitUnstage: (files: string[], workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/git/unstage', workspace), {
 			method: 'POST',
 			body: JSON.stringify({files}),
 		}),
-	gitCommit: (message: string, name?: string, email?: string) =>
-		req<{hash: string}>('/api/git/commit', {
+	gitCommit: (
+		message: string,
+		name?: string,
+		email?: string,
+		workspace?: number,
+	) =>
+		req<{hash: string}>(withWorkspace('/api/git/commit', workspace), {
 			method: 'POST',
 			body: JSON.stringify({message, name, email}),
 		}),
-	gitBranches: () => req<{branches: GitBranch[]}>('/api/git/branches'),
-	gitCheckout: (ref: string) =>
-		req<{ok: boolean}>('/api/git/checkout', {
+	gitBranches: (workspace?: number) =>
+		req<{branches: GitBranch[]}>(withWorkspace('/api/git/branches', workspace)),
+	gitCheckout: (ref: string, workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/git/checkout', workspace), {
 			method: 'POST',
 			body: JSON.stringify({ref}),
 		}),
-	tasks: () =>
+	tasks: (workspace?: number) =>
 		req<{
 			tasks: TaskDef[]
 			runners: {bun: string | null; npm: string | null; make: string | null}
-		}>('/api/tasks'),
-	runTask: (id: string) =>
-		req<{termId: string; task: TaskDef}>('/api/tasks/run', {
-			method: 'POST',
-			body: JSON.stringify({id}),
-		}),
-	lspStatus: () =>
-		req<{langs: {lang: string; running: boolean; error?: string}[]}>(
-			'/api/lsp/status',
+		}>(withWorkspace('/api/tasks', workspace)),
+	runTask: (id: string, workspace?: number) =>
+		req<{termId: string; task: TaskDef}>(
+			withWorkspace('/api/tasks/run', workspace),
+			{
+				method: 'POST',
+				body: JSON.stringify({id}),
+			},
 		),
-	dapStatus: () => req<DapState>('/api/dap/status'),
-	dapStart: (program: string, stopOnEntry = false) =>
-		req<DapState>('/api/dap/start', {
+	lspStatus: (workspace?: number) =>
+		req<{
+			langs: {
+				lang: string
+				running: boolean
+				error?: string
+				rootDir?: string
+			}[]
+		}>(withWorkspace('/api/lsp/status', workspace)),
+	dapStatus: (workspace?: number) =>
+		req<DapState>(withWorkspace('/api/dap/status', workspace)),
+	dapStart: (program: string, stopOnEntry = false, workspace?: number) =>
+		req<DapState>(withWorkspace('/api/dap/start', workspace), {
 			method: 'POST',
 			body: JSON.stringify({program, stopOnEntry}),
 		}),
-	dapStop: () => req<{ok: boolean}>('/api/dap/stop', {method: 'POST'}),
-	lspEnsure: (lang: string) =>
-		req<{ok: boolean; lang: string}>('/api/lsp/ensure', {
+	dapStop: (workspace?: number) =>
+		req<{ok: boolean}>(withWorkspace('/api/dap/stop', workspace), {
 			method: 'POST',
-			body: JSON.stringify({lang}),
 		}),
+	lspEnsure: (lang: string, workspace?: number) =>
+		req<{ok: boolean; lang: string}>(
+			withWorkspace('/api/lsp/ensure', workspace),
+			{
+				method: 'POST',
+				body: JSON.stringify({lang}),
+			},
+		),
 }
 
 function wsBase(): string {
@@ -247,13 +310,17 @@ export function termWsUrl(id: string): string {
 	return `${wsBase()}/term?${q}`
 }
 
-export function dapWsUrl(): string {
-	return withToken(`${wsBase()}/dap`)
+export function dapWsUrl(workspace?: number): string {
+	const base = withToken(`${wsBase()}/dap`)
+	if (workspace !== undefined) {
+		return `${base}&workspace=${workspace}`
+	}
+	return base
 }
 
-export function lspWsUrl(lang: string): string {
+export function lspWsUrl(lang: string, workspace?: number): string {
 	const t = getToken()
-	const q = `lang=${encodeURIComponent(lang)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
+	const q = `lang=${encodeURIComponent(lang)}${t ? `&token=${encodeURIComponent(t)}` : ''}${workspace !== undefined ? `&workspace=${workspace}` : ''}`
 	return `${wsBase()}/lsp?${q}`
 }
 

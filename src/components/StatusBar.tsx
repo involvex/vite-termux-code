@@ -3,7 +3,8 @@ import {useAppStore} from '../store/useAppStore'
 
 export default function StatusBar() {
 	const {
-		root,
+		workspaces,
+		activeWorkspace,
 		connected,
 		saving,
 		status,
@@ -21,6 +22,9 @@ export default function StatusBar() {
 	} = useAppStore()
 	const active = tabs.find(t => t.path === activePath)
 	const dirty = active ? active.content !== active.savedContent : false
+	const currentWs = workspaces[activeWorkspace]
+	const wsName = currentWs ? currentWs.name : 'no workspace'
+	const wsPath = currentWs ? currentWs.rootDir : '…'
 	return (
 		<footer className="statusbar">
 			<span
@@ -31,7 +35,7 @@ export default function StatusBar() {
 				className="status-item"
 				title="served directory"
 			>
-				{root || '…'}
+				{wsName}: {wsPath || '…'}
 			</span>
 			{gitBranch && (
 				<button

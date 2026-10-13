@@ -3,18 +3,18 @@ import {api, type SearchHit} from '../lib/api'
 import {useAppStore} from '../store/useAppStore'
 
 export default function SearchPanel() {
+	const {activeWorkspace, openTab, setStatus} = useAppStore()
 	const [q, setQ] = useState('')
 	const [hits, setHits] = useState<SearchHit[]>([])
 	const [loading, setLoading] = useState(false)
 	const [error, setError] = useState('')
-	const {openTab, setStatus} = useAppStore()
 
 	const run = async () => {
 		if (q.trim().length < 2) return
 		setLoading(true)
 		setError('')
 		try {
-			const res = await api.search(q.trim())
+			const res = await api.search(q.trim(), '', activeWorkspace)
 			setHits(res.results)
 		} catch (e) {
 			setError(e instanceof Error ? e.message : 'search failed')
@@ -25,12 +25,13 @@ export default function SearchPanel() {
 
 	const jump = async (h: SearchHit) => {
 		try {
-			const data = await api.read(h.file)
+			const data = await api.read(h.file, activeWorkspace)
 			openTab({
 				path: h.file,
 				content: data.content ?? '',
 				savedContent: data.content ?? '',
 				mtime: data.mtime,
+				workspace: activeWorkspace,
 			})
 			setStatus(`${h.file}:${h.line}`)
 		} catch (e) {

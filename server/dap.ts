@@ -1,7 +1,7 @@
 import {spawn, type ChildProcess} from 'node:child_process'
 import path from 'node:path'
 import type {WebSocket} from 'ws'
-import {findOnPath, resolveSafe} from './paths.ts'
+import {findOnPath, findRootForPath, resolveSafe} from './paths.ts'
 
 export interface DapBp {
 	line: number
@@ -22,6 +22,7 @@ export interface DapState {
 	program: string | null
 	stopped: DapStopped | null
 	error?: string
+	rootDir?: string
 }
 
 export interface AdapterDef {
@@ -52,6 +53,13 @@ interface DapSource {
 	path?: string
 }
 
+/** Extra node runtime args (e.g. --experimental-strip-types for .ts on node 22). */
+function nodeRuntimeArgs(): string[] {
+	return (process.env.TD_CODE_NODE_RUNTIME_ARGS ?? '')
+		.split(/\s+/)
+		.filter(Boolean)
+}
+
 function relFromAbs(rootDir: string, abs: string): string | null {
 	const rel = path
 		.relative(rootDir, path.normalize(abs))
@@ -67,28 +75,46 @@ function splitCmd(value: string): string[] {
 	)
 }
 
-/** Extra node runtime args (e.g. --experimental-strip-types for .ts on node 22). */
-function nodeRuntimeArgs(): string[] {
-	return splitCmd(process.env.TD_CODE_NODE_RUNTIME_ARGS ?? '').filter(Boolean)
+/** Per-root DAP session state */
+interface DapSession {
+	proc: ChildProcess | null
+	buf: Buffer
+	seq: number
+	pending: Map<number, Pending>
+	sockets: Set<WebSocket>
+	initWaiters: {resolve: () => void; reject: (e: Error) => void}[]
+	breakpoints: Map<string, DapBp[]>
+	rootDir: string
+	adapterDef: AdapterDef | null
+	state: DapState
 }
 
 export class DapManager {
-	private proc: ChildProcess | null = null
-	private buf = Buffer.alloc(0)
-	private seq = 1
-	private pending = new Map<number, Pending>()
-	private sockets = new Set<WebSocket>()
-	private initWaiters: {resolve: () => void; reject: (e: Error) => void}[] = []
-	breakpoints = new Map<string, DapBp[]>()
-	readonly rootDir: string
-	state: DapState = {active: false, adapter: null, program: null, stopped: null}
+	private sessions = new Map<string, DapSession>() // rootDir -> DapSession
+	readonly rootDirs: string[]
 
-	constructor(rootDir: string) {
-		this.rootDir = rootDir
+	constructor(rootDirs: string | string[]) {
+		this.rootDirs = Array.isArray(rootDirs) ? rootDirs : [rootDirs]
 	}
 
-	status(): DapState {
-		return {...this.state}
+	/** @deprecated Use rootDirs instead */
+	get rootDir(): string {
+		return this.rootDirs[0]
+	}
+
+	status(rootDir?: string): DapState {
+		const targetRoot = rootDir ?? this.rootDirs[0]
+		const session = this.sessions.get(targetRoot)
+		if (session) {
+			return {...session.state, rootDir: targetRoot}
+		}
+		return {
+			active: false,
+			adapter: null,
+			program: null,
+			stopped: null,
+			rootDir: targetRoot,
+		}
 	}
 
 	private pythonBin: string | null | undefined
@@ -147,9 +173,7 @@ export class DapManager {
 				// .ts support: node strips types natively on 23.6+; older
 				// 22.x needs --experimental-strip-types, e.g.
 				// TD_CODE_NODE_RUNTIME_ARGS="--experimental-strip-types"
-				...(nodeRuntimeArgs().length
-					? {runtimeArgs: nodeRuntimeArgs()}
-					: {}),
+				...(nodeRuntimeArgs().length ? {runtimeArgs: nodeRuntimeArgs()} : {}),
 			}),
 		},
 	]
@@ -179,7 +203,9 @@ export class DapManager {
 		throw Object.assign(
 			new Error(
 				'no python with debugpy found' +
-					(tried.length ? ` (tried: ${tried.join(', ')})` : ' (no python on PATH)') +
+					(tried.length
+						? ` (tried: ${tried.join(', ')})`
+						: ' (no python on PATH)') +
 					' — run: pip install debugpy; Termux: pkg install python && pip install debugpy',
 			),
 			{status: 501},
@@ -218,29 +244,53 @@ export class DapManager {
 		})
 	}
 
+	private getSession(rootDir: string): DapSession {
+		let session = this.sessions.get(rootDir)
+		if (!session) {
+			session = {
+				proc: null,
+				buf: Buffer.alloc(0),
+				seq: 1,
+				pending: new Map(),
+				sockets: new Set(),
+				initWaiters: [],
+				breakpoints: new Map(),
+				rootDir,
+				adapterDef: null,
+				state: {active: false, adapter: null, program: null, stopped: null},
+			}
+			this.sessions.set(rootDir, session)
+		}
+		return session
+	}
+
 	/** Spawn a fresh adapter and run the initialize handshake. */
-	private async spawnAdapter(def: AdapterDef): Promise<void> {
-		this.killProc()
+	private async spawnAdapter(
+		session: DapSession,
+		def: AdapterDef,
+	): Promise<void> {
+		this.killProc(session)
 		// Throws {status} with setup instructions when nothing qualifies.
 		const {cmd, args} = await def.resolve()
 		const proc = spawn(cmd, args, {
-			cwd: this.rootDir,
+			cwd: session.rootDir,
 			env: {...process.env},
 			stdio: ['pipe', 'pipe', 'pipe'],
 		})
-		this.proc = proc
-		this.buf = Buffer.alloc(0)
-		proc.stdout?.on('data', d => this.onData(Buffer.from(d)))
+		session.proc = proc
+		session.buf = Buffer.alloc(0)
+		session.adapterDef = def
+		proc.stdout?.on('data', d => this.onData(session, Buffer.from(d)))
 		proc.stderr?.on('data', () => {
 			/* adapter logs go here; surfaced via output events instead */
 		})
-		proc.on('error', err => this.failAll(err))
+		proc.on('error', err => this.failAll(session, err))
 		proc.on('exit', () => {
-			this.failAll(new Error('debug adapter exited'))
-			this.proc = null
+			this.failAll(session, new Error('debug adapter exited'))
+			session.proc = null
 		})
 		try {
-			await this.request('initialize', {
+			await this.request(session, 'initialize', {
 				clientID: 'td-code',
 				adapterID: def.adapterID,
 				linesStartAt1: true,
@@ -248,7 +298,7 @@ export class DapManager {
 				pathFormat: 'path',
 			})
 		} catch (err) {
-			this.killProc()
+			this.killProc(session)
 			throw err
 		}
 	}
@@ -256,10 +306,16 @@ export class DapManager {
 	/** Launch a program. Resolves once configurationDone is accepted (running). */
 	async start(
 		relProgram: string,
-		opts: {stopOnEntry?: boolean} = {},
+		opts: {stopOnEntry?: boolean; rootDir?: string} = {},
 	): Promise<DapState> {
-		if (this.state.active) await this.stop()
-		const abs = resolveSafe(this.rootDir, relProgram)
+		const targetRoot =
+			opts.rootDir ??
+			findRootForPath(this.rootDirs, path.resolve(relProgram)) ??
+			this.rootDirs[0]
+		const session = this.getSession(targetRoot)
+
+		if (session.state.active) await this.stop(targetRoot)
+		const abs = resolveSafe(this.rootDirs, relProgram)
 		if (!abs)
 			throw Object.assign(new Error('program escapes root'), {status: 403})
 		const def = this.adapterFor(relProgram)
@@ -280,15 +336,20 @@ export class DapManager {
 			})
 		}
 
-		await this.spawnAdapter(def)
-		this.state = {active: true, adapter: def.id, program: relProgram, stopped: null}
+		await this.spawnAdapter(session, def)
+		session.state = {
+			active: true,
+			adapter: def.id,
+			program: relProgram,
+			stopped: null,
+		}
 
 		const initialized = new Promise<void>((resolve, reject) => {
 			const t = setTimeout(
 				() => reject(new Error('adapter init timeout')),
 				20000,
 			)
-			this.initWaiters.push({
+			session.initWaiters.push({
 				resolve: () => {
 					clearTimeout(t)
 					resolve()
@@ -302,36 +363,53 @@ export class DapManager {
 		// NOTE: debugpy withholds the `launch` response until the client
 		// finishes configuration (setBreakpoints + configurationDone), so the
 		// launch request must NOT be awaited before the `initialized` event.
-		const launchP = this.request('launch', def.launchArgs(abs, this.rootDir, opts), 60000)
+		const launchP = this.request(
+			session,
+			'launch',
+			def.launchArgs(abs, targetRoot, opts),
+			60000,
+		)
 		// Surface async launch failures without unhandled rejections.
 		launchP.catch(() => {})
 		try {
 			await initialized
 		} catch (err) {
-			this.killProc()
-			this.state = {active: false, adapter: null, program: null, stopped: null}
+			this.killProc(session)
+			session.state = {
+				active: false,
+				adapter: null,
+				program: null,
+				stopped: null,
+			}
 			throw err
 		}
 		// (Re)apply all known breakpoints, then let the program run.
-		for (const [p, bps] of this.breakpoints) {
-			const a = resolveSafe(this.rootDir, p)
-			if (a) await this.applyBreakpoints(a, bps).catch(() => {})
+		for (const [p, bps] of session.breakpoints) {
+			const a = resolveSafe(this.rootDirs, p)
+			if (a) await this.applyBreakpoints(session, a, bps).catch(() => {})
 		}
-		await this.request('configurationDone', {})
+		await this.request(session, 'configurationDone', {})
 		// The launch response should arrive now that configuration is done.
 		await launchP
-		this.broadcast({
+		this.broadcast(session, {
 			type: 'event',
 			event: 'started',
 			body: {program: relProgram},
 		})
-		return this.status()
+		return this.status(targetRoot)
 	}
 
 	async setBreakpoints(
 		relPath: string,
 		bps: (number | DapBp)[],
+		rootDir?: string,
 	): Promise<unknown> {
+		const targetRoot =
+			rootDir ??
+			findRootForPath(this.rootDirs, path.resolve(relPath)) ??
+			this.rootDirs[0]
+		const session = this.getSession(targetRoot)
+
 		const seen = new Set<number>()
 		const clean: DapBp[] = []
 		for (const b of bps) {
@@ -343,21 +421,27 @@ export class DapManager {
 				clean.push({
 					line,
 					...(b.condition ? {condition: b.condition.slice(0, 500)} : {}),
-					...(b.hitCondition ? {hitCondition: b.hitCondition.slice(0, 100)} : {}),
+					...(b.hitCondition
+						? {hitCondition: b.hitCondition.slice(0, 100)}
+						: {}),
 				})
 			if (clean.length >= 100) break
 		}
 		clean.sort((a, b) => a.line - b.line)
-		this.breakpoints.set(relPath, clean)
-		const abs = resolveSafe(this.rootDir, relPath)
-		if (!abs || !this.proc) return {verified: false, stored: true}
-		return this.applyBreakpoints(abs, clean).catch(err => ({
+		session.breakpoints.set(relPath, clean)
+		const abs = resolveSafe(this.rootDirs, relPath)
+		if (!abs || !session.proc) return {verified: false, stored: true}
+		return this.applyBreakpoints(session, abs, clean).catch(err => ({
 			error: err instanceof Error ? err.message : String(err),
 		}))
 	}
 
-	private applyBreakpoints(abs: string, bps: DapBp[]): Promise<unknown> {
-		return this.request('setBreakpoints', {
+	private applyBreakpoints(
+		session: DapSession,
+		abs: string,
+		bps: DapBp[],
+	): Promise<unknown> {
+		return this.request(session, 'setBreakpoints', {
 			source: {path: abs},
 			breakpoints: bps.map(b => ({
 				line: b.line,
@@ -368,28 +452,29 @@ export class DapManager {
 	}
 
 	request(
+		session: DapSession,
 		command: string,
 		args: unknown = {},
 		timeoutMs = 15000,
 	): Promise<unknown> {
-		if (!this.proc || this.proc.killed)
+		if (!session.proc || session.proc.killed)
 			return Promise.reject(new Error('debug adapter not running'))
-		const seq = this.seq++
+		const seq = session.seq++
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
-				this.pending.delete(seq)
+				session.pending.delete(seq)
 				reject(new Error(`dap timeout: ${command}`))
 			}, timeoutMs)
-			this.pending.set(seq, {resolve, reject, timer})
-			this.sendRaw({seq, type: 'request', command, arguments: args})
+			session.pending.set(seq, {resolve, reject, timer})
+			this.sendRaw(session, {seq, type: 'request', command, arguments: args})
 		})
 	}
 
-	private sendRaw(msg: unknown) {
-		if (!this.proc?.stdin) return
+	private sendRaw(session: DapSession, msg: unknown) {
+		if (!session.proc?.stdin) return
 		try {
 			const body = Buffer.from(JSON.stringify(msg), 'utf-8')
-			this.proc.stdin.write(
+			session.proc.stdin.write(
 				Buffer.concat([
 					Buffer.from(`Content-Length: ${body.length}\r\n\r\n`),
 					body,
@@ -400,30 +485,36 @@ export class DapManager {
 		}
 	}
 
-	async stop(): Promise<void> {
-		const wasActive = this.state.active
-		this.state = {active: false, adapter: null, program: null, stopped: null}
-		if (this.proc && !this.proc.killed) {
+	async stop(rootDir?: string): Promise<void> {
+		const targetRoot = rootDir ?? this.rootDirs[0]
+		const session = this.getSession(targetRoot)
+
+		const wasActive = session.state.active
+		session.state = {active: false, adapter: null, program: null, stopped: null}
+		if (session.proc && !session.proc.killed) {
 			try {
-				await this.request('disconnect', {terminateDebuggee: true}, 5000).catch(
-					() => {},
-				)
+				await this.request(
+					session,
+					'disconnect',
+					{terminateDebuggee: true},
+					5000,
+				).catch(() => {})
 			} finally {
-				this.killProc()
+				this.killProc(session)
 			}
 		} else {
-			this.killProc()
+			this.killProc(session)
 		}
-		for (const w of this.initWaiters.splice(0)) {
+		for (const w of session.initWaiters.splice(0)) {
 			w.reject(new Error('debug session stopped'))
 		}
 		if (wasActive)
-			this.broadcast({type: 'event', event: 'terminated', body: {}})
+			this.broadcast(session, {type: 'event', event: 'terminated', body: {}})
 	}
 
-	private killProc() {
-		const p = this.proc
-		this.proc = null
+	private killProc(session: DapSession) {
+		const p = session.proc
+		session.proc = null
 		if (!p) return
 		try {
 			if (!p.killed) p.kill('SIGTERM')
@@ -437,41 +528,41 @@ export class DapManager {
 				/* ignore */
 			}
 		}, 2000).unref?.()
-		for (const [, pd] of this.pending) {
+		for (const [, pd] of session.pending) {
 			clearTimeout(pd.timer)
 			pd.reject(new Error('debug adapter exited'))
 		}
-		this.pending.clear()
+		session.pending.clear()
 	}
 
-	private failAll(err: Error) {
-		for (const [, p] of this.pending) {
+	private failAll(session: DapSession, err: Error) {
+		for (const [, p] of session.pending) {
 			clearTimeout(p.timer)
 			p.reject(err)
 		}
-		this.pending.clear()
-		for (const w of this.initWaiters.splice(0)) w.reject(err)
+		session.pending.clear()
+		for (const w of session.initWaiters.splice(0)) w.reject(err)
 	}
 
-	private onData(chunk: Buffer) {
-		this.buf = Buffer.concat([this.buf, chunk])
+	private onData(session: DapSession, chunk: Buffer) {
+		session.buf = Buffer.concat([session.buf, chunk])
 		for (;;) {
-			const h = this.buf.indexOf('\r\n\r\n')
+			const h = session.buf.indexOf('\r\n\r\n')
 			if (h === -1) return
-			const m = this.buf
+			const m = session.buf
 				.subarray(0, h)
 				.toString('utf-8')
 				.match(/Content-Length:\s*(\d+)/i)
 			if (!m) {
-				this.buf = this.buf.subarray(h + 4)
+				session.buf = session.buf.subarray(h + 4)
 				continue
 			}
 			const len = Number(m[1])
-			if (this.buf.length < h + 4 + len) return
-			const body = this.buf.subarray(h + 4, h + 4 + len)
-			this.buf = this.buf.subarray(h + 4 + len)
+			if (session.buf.length < h + 4 + len) return
+			const body = session.buf.subarray(h + 4, h + 4 + len)
+			session.buf = session.buf.subarray(h + 4 + len)
 			try {
-				this.onMessage(JSON.parse(body.toString('utf-8')))
+				this.onMessage(session, JSON.parse(body.toString('utf-8')))
 			} catch {
 				/* ignore */
 			}
@@ -479,6 +570,7 @@ export class DapManager {
 	}
 
 	private onMessage(
+		session: DapSession,
 		msg: {
 			type?: string
 			seq?: number
@@ -490,9 +582,9 @@ export class DapManager {
 		} & Record<string, unknown>,
 	) {
 		if (msg.type === 'response' && typeof msg.request_seq === 'number') {
-			const p = this.pending.get(msg.request_seq)
+			const p = session.pending.get(msg.request_seq)
 			if (p) {
-				this.pending.delete(msg.request_seq)
+				session.pending.delete(msg.request_seq)
 				clearTimeout(p.timer)
 				if (msg.success) p.resolve(msg.body)
 				else {
@@ -507,12 +599,20 @@ export class DapManager {
 			return
 		}
 		if (msg.type !== 'event' || typeof msg.event !== 'string') return
-		void this.onEvent(msg.event, (msg.body ?? {}) as Record<string, unknown>)
+		void this.onEvent(
+			session,
+			msg.event,
+			(msg.body ?? {}) as Record<string, unknown>,
+		)
 	}
 
-	private async onEvent(event: string, body: Record<string, unknown>) {
+	private async onEvent(
+		session: DapSession,
+		event: string,
+		body: Record<string, unknown>,
+	) {
 		if (event === 'initialized') {
-			for (const w of this.initWaiters.splice(0)) w.resolve()
+			for (const w of session.initWaiters.splice(0)) w.resolve()
 			return
 		}
 		if (event === 'stopped') {
@@ -522,6 +622,7 @@ export class DapManager {
 			let line: number | null = null
 			try {
 				const trace = (await this.request(
+					session,
 					'stackTrace',
 					{threadId, startFrame: 0, levels: 1},
 					8000,
@@ -530,14 +631,14 @@ export class DapManager {
 				} | null
 				const top = trace?.stackFrames?.[0]
 				if (top?.source?.path) {
-					file = relFromAbs(this.rootDir, top.source.path)
+					file = relFromAbs(session.rootDir, top.source.path)
 					line = typeof top.line === 'number' ? top.line : null
 				}
 			} catch {
 				/* keep stopped without location */
 			}
-			this.state.stopped = {threadId, reason, file, line}
-			this.broadcast({
+			session.state.stopped = {threadId, reason, file, line}
+			this.broadcast(session, {
 				type: 'event',
 				event: 'stopped',
 				body: {threadId, reason, file, line},
@@ -546,24 +647,24 @@ export class DapManager {
 		}
 		if (event === 'continued') {
 			const all = (body.allThreadsContinued as boolean | undefined) ?? true
-			if (all) this.state.stopped = null
+			if (all) session.state.stopped = null
 			else if (
 				typeof body.threadId === 'number' &&
-				this.state.stopped?.threadId === body.threadId
+				session.state.stopped?.threadId === body.threadId
 			) {
-				this.state.stopped = null
+				session.state.stopped = null
 			}
-			this.broadcast({type: 'event', event: 'continued', body})
+			this.broadcast(session, {type: 'event', event: 'continued', body})
 			return
 		}
 		if (event === 'terminated' || event === 'exited') {
-			this.state = {
+			session.state = {
 				active: false,
-				adapter: this.state.adapter,
-				program: this.state.program,
+				adapter: session.state.adapter,
+				program: session.state.program,
 				stopped: null,
 			}
-			this.broadcast({type: 'event', event, body})
+			this.broadcast(session, {type: 'event', event, body})
 			return
 		}
 		if (event === 'output') {
@@ -571,16 +672,19 @@ export class DapManager {
 			if (typeof b.output === 'string' && b.output.length > 4000) {
 				b.output = b.output.slice(0, 4000) + '…(truncated)'
 			}
-			this.broadcast({type: 'event', event: 'output', body: b})
+			this.broadcast(session, {type: 'event', event: 'output', body: b})
 			return
 		}
 		// Forward anything else (module, breakpoint, capabilities, …) untouched.
-		this.broadcast({type: 'event', event, body})
+		this.broadcast(session, {type: 'event', event, body})
 	}
 
-	attach(ws: WebSocket) {
-		this.sockets.add(ws)
-		ws.on('close', () => this.sockets.delete(ws))
+	attach(ws: WebSocket, rootDir?: string) {
+		const targetRoot = rootDir ?? this.rootDirs[0]
+		const session = this.getSession(targetRoot)
+
+		session.sockets.add(ws)
+		ws.on('close', () => session.sockets.delete(ws))
 		ws.on('error', () => {
 			try {
 				ws.close()
@@ -597,6 +701,7 @@ export class DapManager {
 				path?: string
 				lines?: number[]
 				breakpoints?: DapBp[]
+				rootDir?: string
 			}
 			try {
 				msg = JSON.parse(raw.toString())
@@ -605,12 +710,15 @@ export class DapManager {
 			}
 			void (async () => {
 				try {
+					const msgRoot = msg.rootDir ?? targetRoot
+					const msgSession = this.getSession(msgRoot)
 					if (msg.type === 'breakpoints' && typeof msg.path === 'string') {
 						const r = await this.setBreakpoints(
 							msg.path,
 							(msg.breakpoints as DapBp[] | undefined) ??
 								(msg.lines as number[] | undefined) ??
 								[],
+							msgRoot,
 						)
 						this.sendWs(ws, {type: 'ack', path: msg.path, result: r})
 					} else if (
@@ -618,7 +726,11 @@ export class DapManager {
 						msg.command &&
 						typeof msg.id === 'number'
 					) {
-						const result = await this.request(msg.command, msg.args ?? {})
+						const result = await this.request(
+							msgSession,
+							msg.command,
+							msg.args ?? {},
+						)
 						this.sendWs(ws, {type: 'response', id: msg.id, result, error: null})
 					} else {
 						this.sendWs(ws, {type: 'error', error: 'unknown message'})
@@ -635,12 +747,12 @@ export class DapManager {
 				}
 			})()
 		})
-		this.sendWs(ws, {type: 'hello', state: this.status()})
+		this.sendWs(ws, {type: 'hello', state: this.status(targetRoot)})
 	}
 
-	private broadcast(msg: unknown) {
+	private broadcast(session: DapSession, msg: unknown) {
 		const body = JSON.stringify(msg)
-		for (const ws of this.sockets) {
+		for (const ws of session.sockets) {
 			try {
 				if (ws.readyState === 1) ws.send(body)
 			} catch {
@@ -658,7 +770,9 @@ export class DapManager {
 	}
 
 	shutdown() {
-		this.killProc()
-		this.state = {active: false, adapter: null, program: null, stopped: null}
+		for (const [, session] of this.sessions) {
+			this.killProc(session)
+		}
+		this.sessions.clear()
 	}
 }

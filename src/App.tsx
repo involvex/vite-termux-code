@@ -16,9 +16,11 @@ import {useAppStore} from './store/useAppStore'
 
 export default function App() {
 	const {
+		workspaces,
+		activeWorkspace,
+		setActiveWorkspace,
 		panel,
 		setPanel,
-		setRoot,
 		setConnected,
 		setStatus,
 		sidebarOpen,
@@ -40,13 +42,21 @@ export default function App() {
 		api
 			.health()
 			.then(h => {
-				setRoot(h.root)
+				// Update workspaces if available
+				if (h.roots && Array.isArray(h.roots)) {
+					const ws = h.roots.map((rootDir, index) => ({
+						rootDir,
+						name: rootDir.split(/[/\\]/).pop() || `Workspace ${index + 1}`,
+						index,
+					}))
+					useAppStore.getState().setWorkspaces(ws)
+				}
 				setStatus(`td-code v${h.version}`)
 			})
 			.catch(e => setStatus(e instanceof Error ? e.message : 'offline'))
 		// best-effort branch indicator for the status bar (GitPanel refreshes it too)
 		api
-			.gitStatus()
+			.gitStatus(activeWorkspace)
 			.then(s => {
 				if (s.repo) {
 					setGit(
@@ -58,7 +68,7 @@ export default function App() {
 				}
 			})
 			.catch(() => {})
-	}, [setRoot, setStatus, setGit])
+	}, [setStatus, setGit, activeWorkspace])
 
 	// file watcher socket
 	useEffect(() => {
@@ -88,13 +98,18 @@ export default function App() {
 					const msg = JSON.parse(ev.data as string) as {
 						type: string
 						path?: string
+						root?: string
 					}
 					if (msg.type === 'change' && msg.path) {
-						const open = tabs.find(t => t.path === msg.path)
+						// Find which workspace this change belongs to
+						const wsIndex = workspaces.findIndex(w => w.rootDir === msg.root)
+						const open = tabs.find(
+							t => t.path === msg.path && t.workspace === wsIndex,
+						)
 						// auto-reload only if user has no unsaved edits
 						if (open && open.content === open.savedContent) {
 							api
-								.read(msg.path as string)
+								.read(msg.path as string, wsIndex)
 								.then(d => {
 									if (!d.binary && d.content !== undefined) {
 										updateTab(msg.path as string, {
@@ -141,11 +156,16 @@ export default function App() {
 				useAppStore.getState().setPaletteOpen(true)
 			}
 			const dbg = useAppStore.getState().debug
-			if (dbg.active && (e.key === 'F5' || e.key === 'F10' || e.key === 'F11') && !inFrame) {
+			if (
+				dbg.active &&
+				(e.key === 'F5' || e.key === 'F10' || e.key === 'F11') &&
+				!inFrame
+			) {
 				e.preventDefault()
 				const threadId = dbg.stopped?.threadId
 				if (threadId === undefined || threadId === null) return
-				const cmd = e.key === 'F5' ? 'continue' : e.key === 'F10' ? 'next' : 'stepIn'
+				const cmd =
+					e.key === 'F5' ? 'continue' : e.key === 'F10' ? 'next' : 'stepIn'
 				dapClient
 					.request(cmd, {threadId})
 					.catch(err =>
@@ -245,6 +265,23 @@ export default function App() {
 				>
 					⌘
 				</button>
+				{workspaces.length > 1 && (
+					<select
+						className="workspace-selector"
+						value={activeWorkspace}
+						onChange={e => setActiveWorkspace(parseInt(e.target.value, 10))}
+						title="Switch workspace"
+					>
+						{workspaces.map((ws, i) => (
+							<option
+								key={i}
+								value={i}
+							>
+								{ws.name}
+							</option>
+						))}
+					</select>
+				)}
 				<div className="act-spacer" />
 				<button
 					className="act"

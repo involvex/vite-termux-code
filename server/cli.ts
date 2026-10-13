@@ -13,10 +13,10 @@ function help() {
 	console.log(`td-code v${VERSION} - minimal VSCode-like editor for Termux
 
 Usage:
-  td-code [dir] [options]
+  td-code [dir...] [options]
 
 Arguments:
-  dir                    directory to serve (default: .)
+  dir...                 directories to serve (default: .)
 
 Options:
   -p, --port <n>         port to listen on (default: ${DEFAULT_PORT})
@@ -33,6 +33,7 @@ Examples:
   td-code .                       # serve cwd on 0.0.0.0:4444 with token
   td-code ~/myproj -p 8080 --no-auth
   td-code . --host 127.0.0.1 --auth-token secret --open
+  td-code project1 project2       # serve multiple directories (multi-root workspace)
 
 In another Termux session run e.g. opencode, then open its URL
 in the Browser tab (default quick-link http://localhost:4096).
@@ -40,7 +41,7 @@ in the Browser tab (default quick-link http://localhost:4096).
 }
 
 interface Args {
-	dir: string
+	dirs: string[]
 	port: number
 	host: string
 	noAuth: boolean
@@ -52,7 +53,7 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
 	const out: Args = {
-		dir: '.',
+		dirs: [],
 		port: DEFAULT_PORT,
 		host: DEFAULT_HOST,
 		noAuth: false,
@@ -61,7 +62,6 @@ function parseArgs(argv: string[]): Args {
 		noTerms: false,
 		open: false,
 	}
-	const rest: string[] = []
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i]
 		if (a === '-h' || a === '--help') {
@@ -100,15 +100,10 @@ function parseArgs(argv: string[]): Args {
 			help()
 			process.exit(1)
 		} else {
-			rest.push(a)
+			out.dirs.push(a)
 		}
 	}
-	if (rest.length > 0) out.dir = rest[0] as string
-	if (rest.length > 1) {
-		console.error(`too many positional args: ${rest.join(' ')}\n`)
-		help()
-		process.exit(1)
-	}
+	if (out.dirs.length === 0) out.dirs = ['.']
 	return out
 }
 
@@ -144,19 +139,20 @@ async function tryOpen(url: string) {
 
 async function main() {
 	const args = parseArgs(process.argv.slice(2))
-	const rootDir = path.resolve(
-		process.cwd(),
-		args.dir.replace(/^~/, os.homedir()),
+	const rootDirs = args.dirs.map(d =>
+		path.resolve(process.cwd(), d.replace(/^~/, os.homedir())),
 	)
 
-	if (!existsSync(rootDir)) {
-		console.error(`directory not found: ${rootDir}`)
-		process.exit(1)
-	}
-	const st = statSync(rootDir)
-	if (!st.isDirectory()) {
-		console.error(`not a directory: ${rootDir}`)
-		process.exit(1)
+	for (const rootDir of rootDirs) {
+		if (!existsSync(rootDir)) {
+			console.error(`directory not found: ${rootDir}`)
+			process.exit(1)
+		}
+		const st = statSync(rootDir)
+		if (!st.isDirectory()) {
+			console.error(`not a directory: ${rootDir}`)
+			process.exit(1)
+		}
 	}
 
 	let token: string | null = null
@@ -172,7 +168,7 @@ async function main() {
 	if (args.noAuth && !envToken) token = null
 
 	await startServer({
-		rootDir,
+		rootDirs,
 		port,
 		host,
 		authToken: token,
