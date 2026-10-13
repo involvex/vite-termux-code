@@ -1,4 +1,5 @@
 import {api} from '../lib/api'
+import {notifyFileSaved} from '../lib/extensionApi'
 import {useAppStore} from '../store/useAppStore'
 import Reloadable from './Reloadable'
 
@@ -22,6 +23,10 @@ export default function EditorTabs() {
 			const res = await api.save(path, tab.content, workspace)
 			updateTab(path, {savedContent: tab.content, mtime: res.mtime})
 			setStatus(`saved ${path}`)
+			notifyFileSaved(
+				path,
+				workspace ?? tab.workspace ?? useAppStore.getState().activeWorkspace,
+			)
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'save failed')
 		} finally {

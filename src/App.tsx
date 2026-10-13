@@ -4,6 +4,7 @@ import BrowserFrame from './components/BrowserFrame'
 import CommandPalette from './components/CommandPalette'
 import DebugPanel from './components/DebugPanel'
 import EditorTabs from './components/EditorTabs'
+import ExtensionsPanel from './components/ExtensionsPanel'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
 import Reloadable from './components/Reloadable'
@@ -12,6 +13,13 @@ import StatusBar from './components/StatusBar'
 import TasksPanel from './components/TasksPanel'
 import {api, wsUrl} from './lib/api'
 import {dapClient} from './lib/dap'
+import {
+	notifyActiveTabChanged,
+	notifyActiveWorkspaceChanged,
+	notifyTabClosed,
+	notifyTabOpened,
+} from './lib/extensionApi'
+import {initializeExtensions} from './lib/extensionHost'
 import {useAppStore} from './store/useAppStore'
 
 export default function App() {
@@ -69,6 +77,62 @@ export default function App() {
 			})
 			.catch(() => {})
 	}, [setStatus, setGit, activeWorkspace])
+
+	// Initialize extension system
+	useEffect(() => {
+		initializeExtensions().catch(err => {
+			console.error('[ExtensionHost] Initialization failed:', err)
+			setStatus('Extension system init failed')
+		})
+	}, [setStatus])
+
+	// Subscribe to store changes for extension events
+	useEffect(() => {
+		let prevTabs = useAppStore.getState().tabs
+		let prevActivePath = useAppStore.getState().activePath
+		let prevActiveWorkspace = useAppStore.getState().activeWorkspace
+
+		const unsubscribe = useAppStore.subscribe(state => {
+			const {tabs, activePath, activeWorkspace} = state
+
+			// Tab opened
+			if (tabs.length > prevTabs.length) {
+				const newTab = tabs.find(
+					t =>
+						!prevTabs.some(
+							p => p.path === t.path && p.workspace === t.workspace,
+						),
+				)
+				if (newTab) notifyTabOpened(newTab)
+			}
+
+			// Tab closed
+			if (tabs.length < prevTabs.length) {
+				const closedTab = prevTabs.find(
+					t =>
+						!tabs.some(p => p.path === t.path && p.workspace === t.workspace),
+				)
+				if (closedTab) notifyTabClosed(closedTab)
+			}
+
+			// Active tab changed
+			if (activePath !== prevActivePath) {
+				const newTab = activePath ? tabs.find(t => t.path === activePath) : null
+				notifyActiveTabChanged(newTab ?? null)
+			}
+
+			// Active workspace changed
+			if (activeWorkspace !== prevActiveWorkspace) {
+				notifyActiveWorkspaceChanged(activeWorkspace)
+			}
+
+			prevTabs = tabs
+			prevActivePath = activePath
+			prevActiveWorkspace = activeWorkspace
+		})
+
+		return () => unsubscribe()
+	}, [])
 
 	// file watcher socket
 	useEffect(() => {
@@ -252,6 +316,16 @@ export default function App() {
 					🌐
 				</button>
 				<button
+					className={`act ${panel === 'extensions' ? 'active' : ''}`}
+					title="Extensions"
+					onClick={() => {
+						setPanel('extensions')
+						setSidebarOpen(true)
+					}}
+				>
+					🧩
+				</button>
+				<button
 					className={`act ${terminalOpen ? 'active' : ''}`}
 					title="Terminal (Ctrl+`)"
 					onClick={() => setTerminalOpen(!terminalOpen)}
@@ -302,6 +376,8 @@ export default function App() {
 						<TasksPanel />
 					) : panel === 'debug' ? (
 						<DebugPanel />
+					) : panel === 'extensions' ? (
+						<ExtensionsPanel />
 					) : (
 						<GitPanel />
 					)}

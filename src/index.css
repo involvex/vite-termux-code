@@ -1219,3 +1219,87 @@ body {
 .context-menu-item.danger {
 	color: var(--danger);
 }
+
+/* Extensions Panel */
+.extension-item {
+	padding: 8px 0;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.extension-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.extension-info {
+	flex: 1;
+	min-width: 0;
+}
+
+.extension-name-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 4px;
+}
+
+.extension-name {
+	font-weight: 500;
+	font-size: 14px;
+}
+
+.extension-version {
+	font-size: 11px;
+	color: var(--text-dim);
+	background: var(--bg-input);
+	padding: 2px 6px;
+	border-radius: 4px;
+	font-family: var(--mono);
+}
+
+.extension-error {
+	color: var(--danger);
+	font-size: 12px;
+}
+
+.extension-meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	color: var(--text-dim);
+	margin-bottom: 4px;
+}
+
+.extension-publisher {
+	opacity: 0.7;
+}
+
+.extension-categories {
+	font-size: 10px;
+	background: var(--bg-input);
+	padding: 1px 6px;
+	border-radius: 3px;
+	text-transform: lowercase;
+}
+
+.extension-description {
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.4;
+}
+
+.extension-actions {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.icon-btn.small {
+	min-width: 32px;
+	min-height: 32px;
+	font-size: 13px;
+	padding: 0;
+}

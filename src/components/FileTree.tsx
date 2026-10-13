@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {api, type FileItem, type Workspace} from '../lib/api'
+import {notifyFileCreated, notifyFileDeleted} from '../lib/extensionApi'
 import {fileBadge} from '../lib/icons'
 import {useAppStore} from '../store/useAppStore'
 
@@ -215,8 +216,13 @@ export default function FileTree() {
 		)
 		if (!name) return
 		try {
-			if (kind === 'file') await api.save(name.replace(/^\//, ''), '', wsIndex)
-			else await api.mkdir(name.replace(/^\//, ''), wsIndex)
+			if (kind === 'file') {
+				await api.save(name.replace(/^\//, ''), '', wsIndex)
+				notifyFileCreated(name.replace(/^\//, ''), wsIndex ?? activeWorkspace)
+			} else {
+				await api.mkdir(name.replace(/^\//, ''), wsIndex)
+				notifyFileCreated(name.replace(/^\//, ''), wsIndex ?? activeWorkspace)
+			}
 			refresh()
 			setStatus('created')
 		} catch (e) {
@@ -229,6 +235,8 @@ export default function FileTree() {
 		if (!to || to === item.path) return
 		try {
 			await api.rename(item.path, to, wsIndex)
+			notifyFileDeleted(item.path, wsIndex ?? activeWorkspace)
+			notifyFileCreated(to, wsIndex ?? activeWorkspace)
 			refresh()
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'rename failed')
@@ -239,6 +247,7 @@ export default function FileTree() {
 		if (!window.confirm(`Delete ${item.path}?`)) return
 		try {
 			await api.remove(item.path, wsIndex)
+			notifyFileDeleted(item.path, wsIndex ?? activeWorkspace)
 			refresh()
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'delete failed')
