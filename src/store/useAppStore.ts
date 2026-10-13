@@ -15,7 +15,20 @@ export interface OpenTab {
 	binary?: boolean
 }
 
-export type Panel = 'explorer' | 'search' | 'browser' | 'git' | 'tasks'
+export type Panel = 'explorer' | 'search' | 'browser' | 'git' | 'tasks' | 'debug'
+
+export interface DebugStopped {
+	threadId: number
+	reason: string
+	file: string | null
+	line: number | null
+}
+
+export interface DebugState {
+	active: boolean
+	program: string | null
+	stopped: DebugStopped | null
+}
 
 interface AppState {
 	root: string
@@ -35,6 +48,9 @@ interface AppState {
 	quickLinks: {label: string; url: string}[]
 	gitBranch: string | null
 	gitDirty: number
+	debug: DebugState
+	breakpoints: Record<string, number[]>
+	debugJump: {path: string; line: number; nonce: number} | null
 	settings: Settings
 
 	setRoot: (r: string) => void
@@ -55,6 +71,11 @@ interface AppState {
 	browserForward: () => void
 	setQuickLinks: (q: {label: string; url: string}[]) => void
 	setGit: (branch: string | null, dirty: number) => void
+	setDebug: (patch: Partial<DebugState>) => void
+	resetDebug: () => void
+	toggleBreakpoint: (path: string, line: number) => void
+	setBreakpoints: (path: string, lines: number[]) => void
+	jumpTo: (path: string, line: number) => void
 	setSettings: (patch: Partial<Settings>) => void
 	resetSettings: () => void
 }
@@ -64,6 +85,35 @@ const DEFAULT_LINKS = [
 	{label: 'this app :4444', url: 'http://localhost:4444'},
 	{label: 'vite :5173', url: 'http://localhost:5173'},
 ]
+
+const BP_KEY = 'td-code-breakpoints-v1'
+
+function loadBreakpoints(): Record<string, number[]> {
+	try {
+		const raw = localStorage.getItem(BP_KEY)
+		if (!raw) return {}
+		const p = JSON.parse(raw) as Record<string, unknown>
+		const out: Record<string, number[]> = {}
+		for (const [k, v] of Object.entries(p)) {
+			if (typeof k !== 'string' || !Array.isArray(v)) continue
+			const lines = v.filter(
+				(n): n is number => Number.isInteger(n) && (n as number) > 0,
+			)
+			if (lines.length) out[k] = [...new Set(lines)].sort((a, b) => a - b)
+		}
+		return out
+	} catch {
+		return {}
+	}
+}
+
+function saveBreakpoints(bp: Record<string, number[]>) {
+	try {
+		localStorage.setItem(BP_KEY, JSON.stringify(bp))
+	} catch {
+		/* ignore */
+	}
+}
 
 function loadLinks(): {label: string; url: string}[] {
 	try {
@@ -93,6 +143,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	quickLinks: loadLinks(),
 	gitBranch: null,
 	gitDirty: 0,
+	debug: {active: false, program: null, stopped: null},
+	breakpoints: loadBreakpoints(),
+	debugJump: null,
 	settings: loadSettings(),
 
 	setRoot: root => set({root}),
@@ -157,6 +210,29 @@ export const useAppStore = create<AppState>()((set, get) => ({
 		set({quickLinks})
 	},
 	setGit: (gitBranch, gitDirty) => set({gitBranch, gitDirty}),
+	setDebug: patch => set(s => ({debug: {...s.debug, ...patch}})),
+	resetDebug: () => set({debug: {active: false, program: null, stopped: null}}),
+	toggleBreakpoint: (path, line) =>
+		set(s => {
+			const cur = s.breakpoints[path] ?? []
+			const next = cur.includes(line)
+				? cur.filter(l => l !== line)
+				: [...cur, line].sort((a, b) => a - b)
+			const breakpoints = {...s.breakpoints, [path]: next}
+			if (next.length === 0) delete breakpoints[path]
+			saveBreakpoints(breakpoints)
+			return {breakpoints}
+		}),
+	setBreakpoints: (path, lines) =>
+		set(s => {
+			const clean = [...new Set(lines)].sort((a, b) => a - b)
+			const breakpoints = {...s.breakpoints, [path]: clean}
+			if (clean.length === 0) delete breakpoints[path]
+			saveBreakpoints(breakpoints)
+			return {breakpoints}
+		}),
+	jumpTo: (path, line) =>
+		set(s => ({debugJump: {path, line, nonce: (s.debugJump?.nonce ?? 0) + 1}})),
 	setSettings: patch =>
 		set(s => {
 			const settings = {...s.settings, ...patch}

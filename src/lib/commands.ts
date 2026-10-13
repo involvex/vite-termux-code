@@ -1,5 +1,6 @@
 import {useAppStore, type Panel} from '../store/useAppStore'
 import {api} from './api'
+import {dapClient} from './dap'
 import {nextThemeId, THEMES} from './themes'
 
 export interface Command {
@@ -98,6 +99,54 @@ async function stageAll(unstage: boolean) {
 	}
 }
 
+async function debugStart() {
+	const s = useAppStore.getState()
+	const active = s.tabs.find(t => t.path === s.activePath)
+	const prog = active?.path.endsWith('.py') ? active.path : null
+	if (!prog) {
+		s.setStatus('open a .py file first, or start from the Debug panel')
+		s.setPanel('debug')
+		s.setSidebarOpen(true)
+		return
+	}
+	try {
+		for (const [p, lines] of Object.entries(s.breakpoints)) {
+			dapClient.sendBreakpoints(p, lines)
+		}
+		const st = await api.dapStart(prog)
+		s.setDebug({active: true, program: st.program, stopped: null})
+		s.setPanel('debug')
+		s.setSidebarOpen(true)
+	} catch (e) {
+		s.setStatus(e instanceof Error ? e.message : 'debug start failed')
+	}
+}
+
+async function debugStop() {
+	const s = useAppStore.getState()
+	try {
+		await api.dapStop()
+	} catch {
+		/* already dead */
+	}
+	s.resetDebug()
+}
+
+async function debugStep(cmd: 'continue' | 'next' | 'stepIn' | 'stepOut') {
+	const s = useAppStore.getState()
+	const threadId = s.debug.stopped?.threadId
+	if (!s.debug.active || threadId === undefined || threadId === null) {
+		s.setStatus('nothing stopped')
+		return
+	}
+	try {
+		await dapClient.request(cmd, {threadId})
+		if (cmd === 'continue') s.setDebug({stopped: null})
+	} catch (e) {
+		s.setStatus(e instanceof Error ? e.message : `${cmd} failed`)
+	}
+}
+
 async function restartLsp() {
 	const {setStatus} = useAppStore.getState()
 	try {
@@ -183,6 +232,39 @@ export function allCommands(): Command[] {
 			id: 'lsp.restart',
 			title: 'LSP: Restart TypeScript Language Server',
 			run: () => void restartLsp(),
+		},
+		{
+			id: 'debug.start',
+			title: 'Debug: Start Debugging Active Python File',
+			run: () => void debugStart(),
+		},
+		{
+			id: 'debug.stop',
+			title: 'Debug: Stop',
+			run: () => void debugStop(),
+		},
+		{
+			id: 'debug.continue',
+			title: 'Debug: Continue',
+			hint: 'F5',
+			run: () => void debugStep('continue'),
+		},
+		{
+			id: 'debug.stepOver',
+			title: 'Debug: Step Over',
+			hint: 'F10',
+			run: () => void debugStep('next'),
+		},
+		{
+			id: 'debug.stepInto',
+			title: 'Debug: Step Into',
+			hint: 'F11',
+			run: () => void debugStep('stepIn'),
+		},
+		{
+			id: 'debug.stepOut',
+			title: 'Debug: Step Out',
+			run: () => void debugStep('stepOut'),
 		},
 		{
 			id: 'settings.reset',

@@ -19,19 +19,29 @@ import {json} from '@codemirror/lang-json'
 import {markdown} from '@codemirror/lang-markdown'
 import {python} from '@codemirror/lang-python'
 import {yaml} from '@codemirror/lang-yaml'
-import {
-	bracketMatching,
-	indentOnInput,
-	indentUnit,
-} from '@codemirror/language'
+import {bracketMatching, indentOnInput, indentUnit} from '@codemirror/language'
 import {lintGutter, linter, type Diagnostic} from '@codemirror/lint'
 import {highlightSelectionMatches, searchKeymap} from '@codemirror/search'
-import {EditorState} from '@codemirror/state'
+import {
+	EditorState,
+	RangeSet,
+	RangeSetBuilder,
+	StateEffect,
+	StateField,
+} from '@codemirror/state'
 import {oneDark} from '@codemirror/theme-one-dark'
-import {EditorView, hoverTooltip, keymap, type Tooltip} from '@codemirror/view'
+import {
+	Decoration,
+	EditorView,
+	GutterMarker,
+	gutter,
+	hoverTooltip,
+	keymap,
+	type Tooltip,
+} from '@codemirror/view'
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {extToLanguage} from '../lib/api'
-import {themeById} from '../lib/themes'
+import {dapClient} from '../lib/dap'
 import {
 	lspFor,
 	offsetToPos,
@@ -40,6 +50,7 @@ import {
 	type LspCompletionItem,
 	type LspDiagnostic,
 } from '../lib/lsp'
+import {themeById} from '../lib/themes'
 import {useAppStore} from '../store/useAppStore'
 
 function langExtension(filePath: string) {
@@ -70,6 +81,83 @@ function isTs(filePath: string): boolean {
 	const lang = extToLanguage(filePath)
 	return lang === 'typescript' || lang === 'javascript'
 }
+
+// --- Debug breakpoints: per-file line sets live in the zustand store
+// (persisted). The editor mirrors them into a StateField so the gutter
+// refreshes without recreating the view.
+const setBpsEffect = StateEffect.define<number[]>()
+const bpField = StateField.define<Set<number>>({
+	create: () => new Set<number>(),
+	update(value, tr) {
+		for (const e of tr.effects) {
+			if (e.is(setBpsEffect)) return new Set(e.value)
+		}
+		return value
+	},
+})
+
+class BpMarker extends GutterMarker {
+	toDOM() {
+		const d = document.createElement('div')
+		d.className = 'bp-dot'
+		return d
+	}
+}
+
+function toggleBp(filePath: string, view: EditorView, line: number) {
+	const {breakpoints, setBreakpoints} = useAppStore.getState()
+	const cur = breakpoints[filePath] ?? []
+	const next = cur.includes(line)
+		? cur.filter(l => l !== line)
+		: [...cur, line].sort((a, b) => a - b)
+	setBreakpoints(filePath, next)
+	view.dispatch({effects: setBpsEffect.of(next)})
+	// live-update a running session; backend stores them regardless
+	dapClient.sendBreakpoints(filePath, next)
+}
+
+function bpGutterExt(filePath: string) {
+	return gutter({
+		class: 'bp-gutter',
+		markers: v => {
+			const set = v.state.field(bpField, false)
+			if (!set || set.size === 0) return RangeSet.empty
+			const build = new RangeSetBuilder<GutterMarker>()
+			for (const ln of [...set].sort((a, b) => a - b)) {
+				if (ln < 1 || ln > v.state.doc.lines) continue
+				const from = v.state.doc.line(ln).from
+				build.add(from, from, new BpMarker())
+			}
+			return build.finish()
+		},
+		domEventHandlers: {
+			mousedown(view, line) {
+				toggleBp(filePath, view, view.state.doc.lineAt(line.from).number)
+				return true
+			},
+		},
+	})
+}
+
+// --- Stopped-location highlight (debugger current line)
+const setCurEffect = StateEffect.define<number | null>()
+const curField = StateField.define<number | null>({
+	create: () => null,
+	update(value, tr) {
+		for (const e of tr.effects) {
+			if (e.is(setCurEffect)) return e.value
+		}
+		return value
+	},
+})
+
+const curLineDeco = EditorView.decorations.compute([curField], state => {
+	const ln = state.field(curField)
+	if (!ln || ln < 1 || ln > state.doc.lines) return Decoration.none
+	return Decoration.set([
+		Decoration.line({class: 'dbg-cur-line'}).range(state.doc.line(ln).from),
+	])
+})
 
 function severityOf(s?: number): 'error' | 'warning' | 'info' {
 	if (s === 1) return 'error'
@@ -179,7 +267,7 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 	const containerRef = useRef<HTMLDivElement>(null)
 	const viewRef = useRef<EditorView | null>(null)
 	const changeTimer = useRef<number | null>(null)
-	const {tabs, updateTab, settings} = useAppStore()
+	const {tabs, updateTab, settings, debug, debugJump} = useAppStore()
 	const tab = tabs.find(t => t.path === filePath)
 	const [lspError, setLspError] = useState('')
 
@@ -322,6 +410,11 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 				]),
 				langExtension(filePath),
 				themeById(settings.theme).cm === 'oneDark' ? oneDark : [],
+				bpField.init(
+					() => new Set(useAppStore.getState().breakpoints[filePath] ?? []),
+				),
+				...(readOnly ? [] : [bpGutterExt(filePath)]),
+				curLineDeco,
 				settings.wordWrap ? EditorView.lineWrapping : [],
 				indentUnit.of(
 					settings.insertSpaces ? ' '.repeat(settings.tabSize) : '\t',
@@ -393,6 +486,35 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 			})
 		}
 	}, [tab?.content, tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Debugger: highlight the stopped line in this file (if any)
+	useEffect(() => {
+		const view = viewRef.current
+		if (!view) return
+		const want =
+			debug.stopped && debug.stopped.file === filePath ? (debug.stopped.line ?? null) : null
+		try {
+			if (view.state.field(curField, false) !== want) {
+				view.dispatch({effects: setCurEffect.of(want)})
+			}
+		} catch {
+			/* field absent (read-only race) */
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [debug.stopped, filePath])
+
+	// Debugger: jump-to-location requests (stopped event, frame click)
+	useEffect(() => {
+		const view = viewRef.current
+		if (!view || !debugJump || debugJump.path !== filePath) return
+		const ln = Math.max(1, Math.min(debugJump.line, view.state.doc.lines))
+		const pos = view.state.doc.line(ln).from
+		view.dispatch({
+			selection: {anchor: pos},
+			effects: EditorView.scrollIntoView(pos, {y: 'center'}),
+		})
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [debugJump])
 
 	if (!tab) return null
 	if (tab.binary) {

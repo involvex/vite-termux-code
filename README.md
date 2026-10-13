@@ -73,6 +73,7 @@ Production: `bun run build` → `dist/` (UI) + `dist/cli.js` (server, `bin: td-c
 - Git: `GET /api/git/status|log|diff|branches`, `POST /api/git/stage|unstage|commit|checkout`
 - Tasks: `GET /api/tasks` (bun/npm scripts from `package.json` + `Makefile` targets), `POST /api/tasks/run {id}` → `{termId, task}` (runs in a new terminal session)
 - LSP: `GET /api/lsp/status`, `POST /api/lsp/ensure {lang}`, `WS /lsp?lang=typescript` (`{type:'open'|'change'|'close'|'request'|'ensure'}` ↔ `{type:'opened'|'response'|'diagnostics'|'ready'|'error'}`)
+- Debug: `GET /api/dap/status`, `POST /api/dap/start {program, stopOnEntry?}`, `POST /api/dap/stop`, `WS /dap` (`{type:'breakpoints'|'request'}` ↔ `{type:'ack'|'response'|'event'}`) (`{type:'open'|'change'|'close'|'request'|'ensure'}` ↔ `{type:'opened'|'response'|'diagnostics'|'ready'|'error'}`)
 
 ## Terminal (no node-pty, Termux-safe)
 
@@ -108,6 +109,16 @@ bun add -d typescript-language-server typescript
 ```
 
 If the server can't start, the editor shows a banner with the error and keeps working without intelligence (syntax highlight + bracket matching unaffected).
+
+## Run and Debug (🐞 tab)
+
+Python debugging via `debugpy` (no native dependencies):
+
+```bash
+pip install debugpy   # Termux: pkg install python && pip install debugpy
+```
+
+Click the gutter in the editor to set breakpoints (persisted per file), then ▶ Start debugging. The panel shows controls (continue/step over/into/out/pause/stop), call stack with thread switching, scopes + expandable variables, and the program's console output. The stopped line is highlighted in the editor and the view jumps to it. `F5` / `F10` / `F11` step while a session is active. Single active session (v1); only `.py` programs under the served root.
 
 ## Command Palette (⌘ button, Ctrl+Shift+P / Ctrl+P / F1)
 

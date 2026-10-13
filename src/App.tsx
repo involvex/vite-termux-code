@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react'
 import './App.css'
 import BrowserFrame from './components/BrowserFrame'
 import CommandPalette from './components/CommandPalette'
+import DebugPanel from './components/DebugPanel'
 import EditorTabs from './components/EditorTabs'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
@@ -10,6 +11,7 @@ import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
 import TasksPanel from './components/TasksPanel'
 import {api, wsUrl} from './lib/api'
+import {dapClient} from './lib/dap'
 import {useAppStore} from './store/useAppStore'
 
 export default function App() {
@@ -138,6 +140,21 @@ export default function App() {
 				e.preventDefault()
 				useAppStore.getState().setPaletteOpen(true)
 			}
+			const dbg = useAppStore.getState().debug
+			if (dbg.active && (e.key === 'F5' || e.key === 'F10' || e.key === 'F11') && !inFrame) {
+				e.preventDefault()
+				const threadId = dbg.stopped?.threadId
+				if (threadId === undefined || threadId === null) return
+				const cmd = e.key === 'F5' ? 'continue' : e.key === 'F10' ? 'next' : 'stepIn'
+				dapClient
+					.request(cmd, {threadId})
+					.catch(err =>
+						useAppStore
+							.getState()
+							.setStatus(err instanceof Error ? err.message : 'step failed'),
+					)
+				return
+			}
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && !inFrame) {
 				// Ctrl+P and Ctrl+Shift+P both open the palette
 				e.preventDefault()
@@ -198,6 +215,16 @@ export default function App() {
 					▶
 				</button>
 				<button
+					className={`act ${panel === 'debug' ? 'active' : ''}`}
+					title="Run and Debug"
+					onClick={() => {
+						setPanel('debug')
+						setSidebarOpen(true)
+					}}
+				>
+					🐞
+				</button>
+				<button
 					className={`act ${panel === 'browser' ? 'active' : ''}`}
 					title="Browser (opencode etc.)"
 					onClick={() => setPanel('browser')}
@@ -236,6 +263,8 @@ export default function App() {
 						<SearchPanel />
 					) : panel === 'tasks' ? (
 						<TasksPanel />
+					) : panel === 'debug' ? (
+						<DebugPanel />
 					) : (
 						<GitPanel />
 					)}

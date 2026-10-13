@@ -62,6 +62,20 @@ export interface GitBranch {
 	current: boolean
 }
 
+export interface DapStopped {
+	threadId: number
+	reason: string
+	file: string | null
+	line: number | null
+}
+
+export interface DapState {
+	active: boolean
+	program: string | null
+	stopped: DapStopped | null
+	error?: string
+}
+
 export interface TaskDef {
 	id: string
 	label: string
@@ -198,6 +212,13 @@ export const api = {
 		req<{langs: {lang: string; running: boolean; error?: string}[]}>(
 			'/api/lsp/status',
 		),
+	dapStatus: () => req<DapState>('/api/dap/status'),
+	dapStart: (program: string, stopOnEntry = false) =>
+		req<DapState>('/api/dap/start', {
+			method: 'POST',
+			body: JSON.stringify({program, stopOnEntry}),
+		}),
+	dapStop: () => req<{ok: boolean}>('/api/dap/stop', {method: 'POST'}),
 	lspEnsure: (lang: string) =>
 		req<{ok: boolean; lang: string}>('/api/lsp/ensure', {
 			method: 'POST',
@@ -223,6 +244,10 @@ export function termWsUrl(id: string): string {
 	const t = getToken()
 	const q = `id=${encodeURIComponent(id)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
 	return `${wsBase()}/term?${q}`
+}
+
+export function dapWsUrl(): string {
+	return withToken(`${wsBase()}/dap`)
 }
 
 export function lspWsUrl(lang: string): string {

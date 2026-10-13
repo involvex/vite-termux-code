@@ -17,6 +17,7 @@ export default function StatusBar() {
 		setSidebarOpen,
 		settings,
 		setSettings,
+		debug,
 	} = useAppStore()
 	const active = tabs.find(t => t.path === activePath)
 	const dirty = active ? active.content !== active.savedContent : false
@@ -48,6 +49,19 @@ export default function StatusBar() {
 			<span className="status-item">
 				{active ? `${active.path}${dirty ? ' ●' : ''}` : 'no file'}
 			</span>
+			{debug.active && (
+				<button
+					className="status-term"
+					title={debug.program ?? 'debugging'}
+					onClick={() => {
+						setPanel('debug')
+						setSidebarOpen(true)
+					}}
+				>
+					🐞 {debug.program?.split('/').pop()}
+					{debug.stopped ? ` ⏸ ${debug.stopped.reason}` : ' ▶'}
+				</button>
+			)}
 			<span className="spacer" />
 			<button
 				className="status-term"

@@ -1,6 +1,6 @@
 # td-code Feature Suggestions
 
-> Status (2026-10-13): ✅ Implemented — Command Palette, Settings Persistence, Theme System, Task Runner (bun/npm/make), LSP Support (TypeScript). See README for usage.
+> Status (2026-10-13): ✅ Implemented — Command Palette, Settings Persistence, Theme System, Task Runner (bun/npm/make), LSP Support (TypeScript), Debug Adapter (Python via debugpy). See README for usage.
 
 This document outlines potential features and improvements for the td-code editor, categorized by effort and impact.
 

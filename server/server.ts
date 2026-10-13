@@ -20,6 +20,7 @@ import {
 	gitStatus,
 	gitUnstage,
 } from './git.ts'
+import {DapManager} from './dap.ts'
 import {LspManager} from './lsp.ts'
 import {lookup as mimeLookup} from './mime.ts'
 import {resolveSafe} from './paths.ts'
@@ -113,6 +114,7 @@ async function handleApi(
 	opts: ServeOptions,
 	terms: TermManager | null,
 	lsp: LspManager,
+	dap: DapManager,
 ) {
 	const method = req.method?.toUpperCase() ?? 'GET'
 
@@ -535,6 +537,40 @@ async function handleApi(
 		}
 	}
 
+	if (url.pathname === '/api/dap/status' && method === 'GET') {
+		return sendJson(res, 200, dap.status())
+	}
+
+	if (url.pathname === '/api/dap/start' && method === 'POST') {
+		let body: {program?: string; stopOnEntry?: boolean}
+		try {
+			body = JSON.parse(await readBody(req))
+		} catch {
+			return sendJson(res, 400, {error: 'invalid JSON body'})
+		}
+		if (!body.program) return sendJson(res, 400, {error: 'missing program'})
+		try {
+			return sendJson(
+				res,
+				200,
+				await dap.start(body.program, {stopOnEntry: body.stopOnEntry}),
+			)
+		} catch (err) {
+			const status =
+				typeof (err as {status?: unknown}).status === 'number'
+					? ((err as {status: number}).status as number)
+					: 400
+			return sendJson(res, status, {
+				error: err instanceof Error ? err.message : 'failed to start debug session',
+			})
+		}
+	}
+
+	if (url.pathname === '/api/dap/stop' && method === 'POST') {
+		await dap.stop()
+		return sendJson(res, 200, {ok: true})
+	}
+
 	return sendJson(res, 404, {error: 'unknown api route'})
 }
 
@@ -608,18 +644,20 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	const distDir = path.resolve(__dirname, '../dist')
 	const terms = opts.noTerms ? null : new TermManager(opts.rootDir)
 	const lsp = new LspManager(opts.rootDir)
+	const dap = new DapManager(opts.rootDir)
 	const server = createServer(async (req, res) => {
 		try {
 			const host = req.headers.host ?? `localhost:${opts.port}`
 			const url = new URL(req.url ?? '/', `http://${host}`)
 			if (url.pathname.startsWith('/api/')) {
-				await handleApi(req, res, url, opts, terms, lsp)
+				await handleApi(req, res, url, opts, terms, lsp, dap)
 				return
 			}
 			if (
 				url.pathname === '/ws' ||
 				url.pathname === '/term' ||
-				url.pathname === '/lsp'
+				url.pathname === '/lsp' ||
+				url.pathname === '/dap'
 			) {
 				res.writeHead(426).end('use websocket')
 				return
@@ -639,6 +677,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	const wss = new WebSocketServer({noServer: true})
 	const termWss = new WebSocketServer({noServer: true})
 	const lspWss = new WebSocketServer({noServer: true})
+	const dapWss = new WebSocketServer({noServer: true})
 	const clients = new Set<WebSocket>()
 	wss.on('connection', (ws, req) => {
 		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
@@ -690,6 +729,15 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		lsp.attach(ws, lang)
 	})
 
+	// WebSocket for debug sessions (single active session, v1)
+	dapWss.on('connection', (ws, req) => {
+		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+			ws.close(4401, 'unauthorized')
+			return
+		}
+		dap.attach(ws)
+	})
+
 	server.on('upgrade', (req, socket, head) => {
 		let pathname = '/'
 		try {
@@ -708,6 +756,10 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		} else if (pathname === '/lsp') {
 			lspWss.handleUpgrade(req, socket, head, ws =>
 				lspWss.emit('connection', ws, req),
+			)
+		} else if (pathname === '/dap') {
+			dapWss.handleUpgrade(req, socket, head, ws =>
+				dapWss.emit('connection', ws, req),
 			)
 		} else {
 			socket.destroy()
@@ -769,9 +821,11 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 		watcher?.close().catch(() => {})
 		terms?.killAll()
 		lsp.shutdown()
+		dap.shutdown()
 		wss.close()
 		termWss.close()
 		lspWss.close()
+		dapWss.close()
 		server.close(() => process.exit(0))
 		setTimeout(() => process.exit(0), 1500).unref()
 	}
