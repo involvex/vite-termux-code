@@ -24,6 +24,12 @@ export interface DebugStopped {
 	line: number | null
 }
 
+export interface Bp {
+	line: number
+	condition?: string
+	hitCondition?: string
+}
+
 export interface DebugState {
 	active: boolean
 	adapter: string | null
@@ -50,7 +56,8 @@ interface AppState {
 	gitBranch: string | null
 	gitDirty: number
 	debug: DebugState
-	breakpoints: Record<string, number[]>
+	breakpoints: Record<string, Bp[]>
+	watches: string[]
 	debugJump: {path: string; line: number; nonce: number} | null
 	settings: Settings
 
@@ -75,7 +82,14 @@ interface AppState {
 	setDebug: (patch: Partial<DebugState>) => void
 	resetDebug: () => void
 	toggleBreakpoint: (path: string, line: number) => void
-	setBreakpoints: (path: string, lines: number[]) => void
+	setBreakpoints: (path: string, bps: Bp[]) => void
+	setBreakpointCond: (
+		path: string,
+		line: number,
+		cond: {condition?: string; hitCondition?: string},
+	) => void
+	addWatch: (expr: string) => void
+	removeWatch: (expr: string) => void
 	jumpTo: (path: string, line: number) => void
 	setSettings: (patch: Partial<Settings>) => void
 	resetSettings: () => void
@@ -89,18 +103,29 @@ const DEFAULT_LINKS = [
 
 const BP_KEY = 'td-code-breakpoints-v1'
 
-function loadBreakpoints(): Record<string, number[]> {
+function loadBreakpoints(): Record<string, Bp[]> {
 	try {
 		const raw = localStorage.getItem(BP_KEY)
 		if (!raw) return {}
 		const p = JSON.parse(raw) as Record<string, unknown>
-		const out: Record<string, number[]> = {}
+		const out: Record<string, Bp[]> = {}
 		for (const [k, v] of Object.entries(p)) {
 			if (typeof k !== 'string' || !Array.isArray(v)) continue
-			const lines = v.filter(
-				(n): n is number => Number.isInteger(n) && (n as number) > 0,
-			)
-			if (lines.length) out[k] = [...new Set(lines)].sort((a, b) => a - b)
+			// accepts legacy [1,2] and current [{line, condition?}] shapes
+			const bps: Bp[] = []
+			for (const item of v as unknown[]) {
+				const line = typeof item === 'number' ? item : (item as Bp)?.line
+				if (!Number.isInteger(line) || (line as number) <= 0) continue
+				const b: Bp = {line: line as number}
+				if (typeof item === 'object' && item !== null) {
+					const c = (item as Bp).condition
+					const h = (item as Bp).hitCondition
+					if (typeof c === 'string' && c) b.condition = c.slice(0, 500)
+					if (typeof h === 'string' && h) b.hitCondition = h.slice(0, 100)
+				}
+				if (!bps.some(x => x.line === b.line)) bps.push(b)
+			}
+			if (bps.length) out[k] = bps.sort((a, b) => a.line - b.line)
 		}
 		return out
 	} catch {
@@ -108,9 +133,31 @@ function loadBreakpoints(): Record<string, number[]> {
 	}
 }
 
-function saveBreakpoints(bp: Record<string, number[]>) {
+function saveBreakpoints(bp: Record<string, Bp[]>) {
 	try {
 		localStorage.setItem(BP_KEY, JSON.stringify(bp))
+	} catch {
+		/* ignore */
+	}
+}
+
+const WATCH_KEY = 'td-code-watches-v1'
+
+function loadWatches(): string[] {
+	try {
+		const raw = localStorage.getItem(WATCH_KEY)
+		if (!raw) return []
+		const p = JSON.parse(raw) as unknown
+		if (!Array.isArray(p)) return []
+		return [...new Set(p.filter((x): x is string => typeof x === 'string'))].slice(-50)
+	} catch {
+		return []
+	}
+}
+
+function saveWatches(w: string[]) {
+	try {
+		localStorage.setItem(WATCH_KEY, JSON.stringify(w))
 	} catch {
 		/* ignore */
 	}
@@ -146,6 +193,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	gitDirty: 0,
 	debug: {active: false, adapter: null, program: null, stopped: null},
 	breakpoints: loadBreakpoints(),
+	watches: loadWatches(),
 	debugJump: null,
 	settings: loadSettings(),
 
@@ -217,21 +265,66 @@ export const useAppStore = create<AppState>()((set, get) => ({
 	toggleBreakpoint: (path, line) =>
 		set(s => {
 			const cur = s.breakpoints[path] ?? []
-			const next = cur.includes(line)
-				? cur.filter(l => l !== line)
-				: [...cur, line].sort((a, b) => a - b)
+			const next = cur.some(b => b.line === line)
+				? cur.filter(b => b.line !== line)
+				: [...cur, {line}].sort((a, b) => a.line - b.line)
 			const breakpoints = {...s.breakpoints, [path]: next}
 			if (next.length === 0) delete breakpoints[path]
 			saveBreakpoints(breakpoints)
 			return {breakpoints}
 		}),
-	setBreakpoints: (path, lines) =>
+	setBreakpoints: (path, bps) =>
 		set(s => {
-			const clean = [...new Set(lines)].sort((a, b) => a - b)
+			const seen = new Set<number>()
+			const clean: Bp[] = []
+			for (const b of bps) {
+				if (!Number.isInteger(b.line) || b.line <= 0 || seen.has(b.line))
+					continue
+				seen.add(b.line)
+				clean.push({
+					line: b.line,
+					...(b.condition ? {condition: b.condition} : {}),
+					...(b.hitCondition ? {hitCondition: b.hitCondition} : {}),
+				})
+			}
+			clean.sort((a, b) => a.line - b.line)
 			const breakpoints = {...s.breakpoints, [path]: clean}
 			if (clean.length === 0) delete breakpoints[path]
 			saveBreakpoints(breakpoints)
 			return {breakpoints}
+		}),
+	setBreakpointCond: (path, line, cond) =>
+		set(s => {
+			const cur = s.breakpoints[path] ?? []
+			if (!cur.some(b => b.line === line)) return s
+			const breakpoints = {
+				...s.breakpoints,
+				[path]: cur.map(b =>
+					b.line === line
+						? {
+								line,
+								...(cond.condition ? {condition: cond.condition} : {}),
+								...(cond.hitCondition ? {hitCondition: cond.hitCondition} : {}),
+							}
+						: b,
+				),
+			}
+			saveBreakpoints(breakpoints)
+			return {breakpoints}
+		}),
+	addWatch: expr =>
+		set(s => {
+			const e = expr.trim().slice(0, 500)
+			if (!e || s.watches.includes(e)) return s
+			const watches = [...s.watches, e].slice(-50)
+			saveWatches(watches)
+			return {watches}
+		}),
+	removeWatch: expr =>
+		set(s => {
+			const watches = s.watches.filter(w => w !== expr)
+			saveWatches(watches)
+			return {watches}
 		}),
 	jumpTo: (path, line) =>
 		set(s => ({debugJump: {path, line, nonce: (s.debugJump?.nonce ?? 0) + 1}})),

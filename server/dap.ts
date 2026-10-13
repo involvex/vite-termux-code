@@ -3,6 +3,12 @@ import path from 'node:path'
 import type {WebSocket} from 'ws'
 import {findOnPath, resolveSafe} from './paths.ts'
 
+export interface DapBp {
+	line: number
+	condition?: string
+	hitCondition?: string
+}
+
 export interface DapStopped {
 	threadId: number
 	reason: string
@@ -55,6 +61,17 @@ function relFromAbs(rootDir: string, abs: string): string | null {
 	return rel
 }
 
+function splitCmd(value: string): string[] {
+	return (value.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(s =>
+		s.replace(/^["']|["']$/g, ''),
+	)
+}
+
+/** Extra node runtime args (e.g. --experimental-strip-types for .ts on node 22). */
+function nodeRuntimeArgs(): string[] {
+	return splitCmd(process.env.TD_CODE_NODE_RUNTIME_ARGS ?? '').filter(Boolean)
+}
+
 export class DapManager {
 	private proc: ChildProcess | null = null
 	private buf = Buffer.alloc(0)
@@ -62,7 +79,7 @@ export class DapManager {
 	private pending = new Map<number, Pending>()
 	private sockets = new Set<WebSocket>()
 	private initWaiters: {resolve: () => void; reject: (e: Error) => void}[] = []
-	breakpoints = new Map<string, number[]>()
+	breakpoints = new Map<string, DapBp[]>()
 	readonly rootDir: string
 	state: DapState = {active: false, adapter: null, program: null, stopped: null}
 
@@ -98,21 +115,15 @@ export class DapManager {
 		{
 			id: 'node',
 			label: 'Node.js (js-debug)',
-			exts: ['.js', '.mjs', '.cjs'],
+			exts: ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'],
 			adapterID: 'pwa-node',
 			resolve: async () => {
 				// Full command line so entries needing a runtime work, e.g.
 				//   TD_CODE_JS_DEBUG="node /opt/js-debug/out/src/dapDebugServer.js"
-				const env = (process.env.TD_CODE_JS_DEBUG ?? '').trim()
-				if (env) {
-					const parts =
-						env.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
-					const cmd = (parts[0] ?? '').replace(/^["']|["']$/g, '')
-					if (!cmd) throw Object.assign(new Error('TD_CODE_JS_DEBUG is empty'), {status: 400})
-					return {
-						cmd,
-						args: parts.slice(1).map(s => s.replace(/^["']|["']$/g, '')),
-					}
+				const parts = splitCmd((process.env.TD_CODE_JS_DEBUG ?? '').trim())
+				if (parts.length > 0) {
+					const cmd = parts[0] as string
+					return {cmd, args: parts.slice(1)}
 				}
 				const bin = findOnPath('js-debug')
 				if (bin) return {cmd: bin, args: []}
@@ -133,6 +144,12 @@ export class DapManager {
 				cwd: root,
 				console: 'internalConsole',
 				stopOnEntry: opts.stopOnEntry ?? false,
+				// .ts support: node strips types natively on 23.6+; older
+				// 22.x needs --experimental-strip-types, e.g.
+				// TD_CODE_NODE_RUNTIME_ARGS="--experimental-strip-types"
+				...(nodeRuntimeArgs().length
+					? {runtimeArgs: nodeRuntimeArgs()}
+					: {}),
 			}),
 		},
 	]
@@ -249,7 +266,7 @@ export class DapManager {
 		if (!def)
 			throw Object.assign(
 				new Error(
-					`no debug adapter for ${relProgram} (supported: .py via debugpy, .js/.mjs/.cjs via js-debug)`,
+					`no debug adapter for ${relProgram} (supported: .py via debugpy, .js/.mjs/.cjs/.ts via js-debug)`,
 				),
 				{status: 400},
 			)
@@ -296,9 +313,9 @@ export class DapManager {
 			throw err
 		}
 		// (Re)apply all known breakpoints, then let the program run.
-		for (const [p, lines] of this.breakpoints) {
+		for (const [p, bps] of this.breakpoints) {
 			const a = resolveSafe(this.rootDir, p)
-			if (a) await this.applyBreakpoints(a, lines).catch(() => {})
+			if (a) await this.applyBreakpoints(a, bps).catch(() => {})
 		}
 		await this.request('configurationDone', {})
 		// The launch response should arrive now that configuration is done.
@@ -311,10 +328,26 @@ export class DapManager {
 		return this.status()
 	}
 
-	async setBreakpoints(relPath: string, lines: number[]): Promise<unknown> {
-		const clean = [...new Set(lines.filter(n => Number.isInteger(n) && n > 0))]
-			.sort((a, b) => a - b)
-			.slice(0, 100)
+	async setBreakpoints(
+		relPath: string,
+		bps: (number | DapBp)[],
+	): Promise<unknown> {
+		const seen = new Set<number>()
+		const clean: DapBp[] = []
+		for (const b of bps) {
+			const line = typeof b === 'number' ? b : b.line
+			if (!Number.isInteger(line) || line <= 0 || seen.has(line)) continue
+			seen.add(line)
+			if (typeof b === 'number') clean.push({line})
+			else
+				clean.push({
+					line,
+					...(b.condition ? {condition: b.condition.slice(0, 500)} : {}),
+					...(b.hitCondition ? {hitCondition: b.hitCondition.slice(0, 100)} : {}),
+				})
+			if (clean.length >= 100) break
+		}
+		clean.sort((a, b) => a.line - b.line)
 		this.breakpoints.set(relPath, clean)
 		const abs = resolveSafe(this.rootDir, relPath)
 		if (!abs || !this.proc) return {verified: false, stored: true}
@@ -323,10 +356,14 @@ export class DapManager {
 		}))
 	}
 
-	private applyBreakpoints(abs: string, lines: number[]): Promise<unknown> {
+	private applyBreakpoints(abs: string, bps: DapBp[]): Promise<unknown> {
 		return this.request('setBreakpoints', {
 			source: {path: abs},
-			breakpoints: lines.map(l => ({line: l})),
+			breakpoints: bps.map(b => ({
+				line: b.line,
+				...(b.condition ? {condition: b.condition} : {}),
+				...(b.hitCondition ? {hitCondition: b.hitCondition} : {}),
+			})),
 		})
 	}
 
@@ -559,6 +596,7 @@ export class DapManager {
 				args?: unknown
 				path?: string
 				lines?: number[]
+				breakpoints?: DapBp[]
 			}
 			try {
 				msg = JSON.parse(raw.toString())
@@ -568,7 +606,12 @@ export class DapManager {
 			void (async () => {
 				try {
 					if (msg.type === 'breakpoints' && typeof msg.path === 'string') {
-						const r = await this.setBreakpoints(msg.path, msg.lines ?? [])
+						const r = await this.setBreakpoints(
+							msg.path,
+							(msg.breakpoints as DapBp[] | undefined) ??
+								(msg.lines as number[] | undefined) ??
+								[],
+						)
 						this.sendWs(ws, {type: 'ack', path: msg.path, result: r})
 					} else if (
 						msg.type === 'request' &&

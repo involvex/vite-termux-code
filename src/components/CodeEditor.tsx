@@ -42,6 +42,7 @@ import {
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {extToLanguage} from '../lib/api'
 import {dapClient} from '../lib/dap'
+import type {Bp} from '../store/useAppStore'
 import {
 	lspFor,
 	offsetToPos,
@@ -85,35 +86,76 @@ function isTs(filePath: string): boolean {
 // --- Debug breakpoints: per-file line sets live in the zustand store
 // (persisted). The editor mirrors them into a StateField so the gutter
 // refreshes without recreating the view.
-const setBpsEffect = StateEffect.define<number[]>()
-const bpField = StateField.define<Set<number>>({
-	create: () => new Set<number>(),
+const setBpsEffect = StateEffect.define<Bp[]>()
+const bpField = StateField.define<Map<number, Bp>>({
+	create: () => new Map<number, Bp>(),
 	update(value, tr) {
 		for (const e of tr.effects) {
-			if (e.is(setBpsEffect)) return new Set(e.value)
+			if (e.is(setBpsEffect))
+				return new Map(e.value.map(b => [b.line, b] as [number, Bp]))
 		}
 		return value
 	},
 })
 
 class BpMarker extends GutterMarker {
+	cond: boolean
+	constructor(cond: boolean) {
+		super()
+		this.cond = cond
+	}
 	toDOM() {
 		const d = document.createElement('div')
-		d.className = 'bp-dot'
+		d.className = this.cond ? 'bp-dot bp-dot-cond' : 'bp-dot'
 		return d
 	}
+}
+
+function syncBpField(filePath: string, view: EditorView) {
+	const bps = useAppStore.getState().breakpoints[filePath] ?? []
+	view.dispatch({effects: setBpsEffect.of(bps)})
+	// live-update a running session; backend stores them regardless
+	dapClient.sendBreakpoints(filePath, bps)
 }
 
 function toggleBp(filePath: string, view: EditorView, line: number) {
 	const {breakpoints, setBreakpoints} = useAppStore.getState()
 	const cur = breakpoints[filePath] ?? []
-	const next = cur.includes(line)
-		? cur.filter(l => l !== line)
-		: [...cur, line].sort((a, b) => a - b)
+	const next = cur.some(b => b.line === line)
+		? cur.filter(b => b.line !== line)
+		: [...cur, {line}].sort((a, b) => a.line - b.line)
 	setBreakpoints(filePath, next)
-	view.dispatch({effects: setBpsEffect.of(next)})
-	// live-update a running session; backend stores them regardless
-	dapClient.sendBreakpoints(filePath, next)
+	syncBpField(filePath, view)
+}
+
+/** Alt+Click a breakpoint: edit condition / hit condition (empty clears). */
+function editBpCond(filePath: string, view: EditorView, line: number) {
+	const {breakpoints, setBreakpointCond, setStatus} = useAppStore.getState()
+	const cur = breakpoints[filePath]?.find(b => b.line === line)
+	if (!cur) {
+		setStatus(`set a breakpoint on line ${line} first (click the gutter)`)
+		return
+	}
+	const condition = window.prompt(
+		`Condition for breakpoint at ${filePath}:${line} (expression, empty = always break):`,
+		cur.condition ?? '',
+	)
+	if (condition === null) return
+	const hitCondition = window.prompt(
+		'Hit condition (e.g. >= 5, empty = none):',
+		cur.hitCondition ?? '',
+	)
+	if (hitCondition === null) return
+	const c = condition.trim()
+	const h = hitCondition.trim()
+	// empty strings clear that part; clearing both keeps a plain breakpoint
+	setBreakpointCond(filePath, line, {condition: c, hitCondition: h})
+	syncBpField(filePath, view)
+	setStatus(
+		c || h
+			? `conditional breakpoint ${filePath}:${line}`
+			: `breakpoint ${filePath}:${line}`,
+	)
 }
 
 function bpGutterExt(filePath: string) {
@@ -123,16 +165,22 @@ function bpGutterExt(filePath: string) {
 			const set = v.state.field(bpField, false)
 			if (!set || set.size === 0) return RangeSet.empty
 			const build = new RangeSetBuilder<GutterMarker>()
-			for (const ln of [...set].sort((a, b) => a - b)) {
+			for (const [ln, bp] of [...set.entries()].sort((a, b) => a[0] - b[0])) {
 				if (ln < 1 || ln > v.state.doc.lines) continue
 				const from = v.state.doc.line(ln).from
-				build.add(from, from, new BpMarker())
+				build.add(
+					from,
+					from,
+					new BpMarker(Boolean(bp.condition || bp.hitCondition)),
+				)
 			}
 			return build.finish()
 		},
 		domEventHandlers: {
-			mousedown(view, line) {
-				toggleBp(filePath, view, view.state.doc.lineAt(line.from).number)
+			mousedown(view, line, event) {
+				const ln = view.state.doc.lineAt(line.from).number
+				if ((event as MouseEvent).altKey) editBpCond(filePath, view, ln)
+				else toggleBp(filePath, view, ln)
 				return true
 			},
 		},
@@ -411,7 +459,13 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 				langExtension(filePath),
 				themeById(settings.theme).cm === 'oneDark' ? oneDark : [],
 				bpField.init(
-					() => new Set(useAppStore.getState().breakpoints[filePath] ?? []),
+					() =>
+						new Map(
+							(useAppStore.getState().breakpoints[filePath] ?? []).map(b => [
+								b.line,
+								b,
+							]),
+						),
 				),
 				...(readOnly ? [] : [bpGutterExt(filePath)]),
 				curLineDeco,

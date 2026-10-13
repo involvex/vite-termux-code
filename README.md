@@ -118,7 +118,7 @@ Python and Node.js debugging (no native dependencies, one session at a time):
 pip install debugpy   # Termux: pkg install python && pip install debugpy
 ```
 
-`.py` files use `debugpy` (auto-detected from any python on `PATH`). `.js`/`.mjs`/`.cjs` files use `js-debug`, which is **not** on npm — provide it explicitly:
+`.py` files use `debugpy` (auto-detected from any python on `PATH`). `.js`/`.mjs`/`.cjs`/`.ts`/`.mts`/`.cts` files use `js-debug`, which is **not** on npm — provide it explicitly:
 
 1. Download `js-debug-dap` from the [microsoft/vscode-js-debug releases](https://github.com/microsoft/vscode-js-debug/releases) (or copy it from a VS Code install), and install node (`pkg install nodejs` on Termux).
 2. Set `TD_CODE_JS_DEBUG` to the full adapter command, e.g.
@@ -127,7 +127,11 @@ pip install debugpy   # Termux: pkg install python && pip install debugpy
 
 Without it, starting a `.js` program fails with setup instructions (verified against the DAP protocol with a mock adapter; real js-debug behavior may vary slightly).
 
-Click the gutter in the editor to set breakpoints (persisted per file), then ▶ Start debugging. The panel shows controls (continue/step over/into/out/pause/stop), call stack with thread switching, scopes + expandable variables, and the program's console output. The stopped line is highlighted in the editor and the view jumps to it. `F5` / `F10` / `F11` step while a session is active. Single active session (v1); only `.py` programs under the served root.
+Click the gutter in the editor to set breakpoints (persisted per file, `Alt+Click` a set breakpoint for condition / hit condition), then ▶ Start debugging. The panel shows controls (continue/step over/into/out/pause/stop), call stack with thread switching, scopes + expandable variables, and the program's console output. The stopped line is highlighted in the editor and the view jumps to it. `F5` / `F10` / `F11` step while a session is active. Single active session (v1); only programs under the served root.
+
+- **Conditional breakpoints**: `Alt+Click` a set breakpoint, then enter a condition expression and/or hit condition (empty clears). Shown as hollow dots; evaluated by the adapter.
+- **Watch expressions**: add them in the Watch section; they re-evaluate on every stop against the selected frame.
+- **TypeScript on node**: node strips types natively on 23.6+ (no setup). On node 22.6–22.x pass the flag through, e.g. `TD_CODE_NODE_RUNTIME_ARGS="--experimental-strip-types"`, which is forwarded as `runtimeArgs` in the js-debug launch config.
 
 ## Command Palette (⌘ button, Ctrl+Shift+P / Ctrl+P / F1)
 

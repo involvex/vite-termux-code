@@ -99,7 +99,7 @@ async function stageAll(unstage: boolean) {
 	}
 }
 
-const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs']
+const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']
 
 async function debugStart() {
 	const s = useAppStore.getState()

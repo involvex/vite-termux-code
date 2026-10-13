@@ -27,6 +27,9 @@ export default function DebugPanel() {
 		setDebug,
 		resetDebug,
 		breakpoints,
+		watches,
+		addWatch,
+		removeWatch,
 		setStatus,
 		setPanel,
 		tabs,
@@ -41,10 +44,12 @@ export default function DebugPanel() {
 	const [vars, setVars] = useState<VarNode[]>([])
 	const [output, setOutput] = useState<string[]>([])
 	const [error, setError] = useState('')
+	const [watchInput, setWatchInput] = useState('')
+	const [watchVals, setWatchVals] = useState<Record<string, string>>({})
 	const outRef = useRef<HTMLDivElement>(null)
 
 	// default program = active .py/.js tab
-	const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs']
+	const DEBUG_EXTS = ['.py', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']
 	useEffect(() => {
 		if (!program) {
 			const active = tabs.find(t => t.path === activePath)
@@ -281,6 +286,33 @@ export default function DebugPanel() {
 
 	const stopped = debug.stopped
 
+	// Re-evaluate watches whenever execution stops or the frame changes.
+	useEffect(() => {
+		if (!stopped || activeFrame === null || watches.length === 0) {
+			if (watches.length === 0) setWatchVals({})
+			return
+		}
+		let dead = false
+		void (async () => {
+			const out: Record<string, string> = {}
+			for (const w of watches) {
+				try {
+					const r = await dapClient.request<{result?: string; variablesReference?: number}>(
+						'evaluate',
+						{expression: w, frameId: activeFrame, context: 'watch'},
+					)
+					out[w] = (r.result ?? '').slice(0, 300)
+				} catch (e) {
+					out[w] = `! ${e instanceof Error ? e.message : 'error'}`
+				}
+			}
+			if (!dead) setWatchVals(out)
+		})()
+		return () => {
+			dead = true
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [stopped, activeFrame, watches])
 	return (
 		<div className="panel-col">
 			<div className="panel-toolbar">
@@ -464,6 +496,52 @@ export default function DebugPanel() {
 							</li>
 						))}
 						{vars.length === 0 && <li className="muted">—</li>}
+					</ul>
+
+					<div className="git-log-title">Watch</div>
+					<form
+						className="dbg-watch-form"
+						onSubmit={e => {
+							e.preventDefault()
+							if (watchInput.trim()) {
+								addWatch(watchInput)
+								setWatchInput('')
+							}
+						}}
+					>
+						<input
+							className="git-input"
+							value={watchInput}
+							onChange={e => setWatchInput(e.target.value)}
+							placeholder="expression, e.g. total * 2"
+							spellCheck={false}
+						/>
+						<button
+							className="chip"
+							type="submit"
+							title="Add watch"
+						>
+							+ add
+						</button>
+					</form>
+					<ul className="git-log">
+						{watches.map(w => (
+							<li key={w}>
+								<span className="git-path">
+									{w} = {watchVals[w] ?? (stopped ? '…' : '—')}
+								</span>
+								<button
+									className="icon-btn git-act"
+									title="Remove watch"
+									onClick={() => removeWatch(w)}
+								>
+									×
+								</button>
+							</li>
+						))}
+						{watches.length === 0 && (
+							<li className="muted">no watches — type an expression above</li>
+						)}
 					</ul>
 
 					<div className="git-log-title">Console</div>

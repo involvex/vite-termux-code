@@ -512,6 +512,24 @@ body {
 	cursor: pointer;
 }
 
+.bp-dot-cond {
+	background: transparent;
+	border: 2px solid var(--danger);
+	width: 9px;
+	height: 9px;
+}
+
+.dbg-watch-form {
+	display: flex;
+	gap: 6px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border);
+}
+
+.dbg-watch-form .git-input {
+	flex: 1;
+}
+
 .dbg-cur-line {
 	background: rgba(255, 200, 0, 0.13);
 }

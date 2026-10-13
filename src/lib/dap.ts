@@ -111,10 +111,13 @@ class DapClient {
 		this.connect()
 	}
 
-	sendBreakpoints(path: string, lines: number[]) {
+	sendBreakpoints(
+		path: string,
+		bps: {line: number; condition?: string; hitCondition?: string}[],
+	) {
 		this.connect()
 		if (this.ws?.readyState === 1) {
-			this.ws.send(JSON.stringify({type: 'breakpoints', path, lines}))
+			this.ws.send(JSON.stringify({type: 'breakpoints', path, breakpoints: bps}))
 		}
 	}
 
