@@ -1,8 +1,15 @@
 import {describe, expect, test} from 'bun:test'
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {
+	checkWorkspacePaths,
 	generatePairingCode,
 	initUserConfig,
 	parseConfig,
@@ -148,6 +155,27 @@ describe('parseEnvWorkspaces', () => {
 		])
 		expect(parseEnvWorkspaces('')).toEqual([])
 		expect(parseEnvWorkspaces(undefined)).toEqual([])
+	})
+})
+
+describe('checkWorkspacePaths', () => {
+	test('reports existing dirs, missing paths, and files', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'td-code-ws-'))
+		try {
+			const sub = join(dir, 'proj')
+			mkdirSync(sub, {recursive: true})
+			const file = join(dir, 'note.txt')
+			writeFileSync(file, 'hi', 'utf8')
+			const out = checkWorkspacePaths(
+				[{path: sub}, {path: join(dir, 'gone')}, {path: file}],
+				dir,
+			)
+			expect(out[0]).toMatchObject({exists: true, isDirectory: true})
+			expect(out[1]).toMatchObject({exists: false, isDirectory: false})
+			expect(out[2]).toMatchObject({exists: true, isDirectory: false})
+		} finally {
+			rmSync(dir, {recursive: true, force: true})
+		}
 	})
 })
 

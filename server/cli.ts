@@ -4,6 +4,7 @@ import {existsSync, statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+	checkWorkspacePaths,
 	generatePairingCode,
 	initUserConfig,
 	loadUserConfig,
@@ -23,6 +24,8 @@ function help() {
 Usage:
   td-code [dir...] [options]
   td-code config init [--force]   write a starter ~/.td-code/config.json
+  td-code config edit             open the config in $VISUAL/$EDITOR
+  td-code config validate         check the config without starting
   td-code config path             print the config file path
 
 Arguments:
@@ -49,6 +52,7 @@ Examples:
   td-code . --pairing             # also accept a 6-digit pairing code
   td-code project1 project2       # serve multiple directories (multi-root workspace)
   td-code config init             # write a commented starter config
+  td-code config validate         # check the config without starting
 
 Config file (optional): ${userConfigPath()}
   { "port": 4444, "auth": false, "pairing": { "enabled": true } }
@@ -141,9 +145,13 @@ function parseArgs(argv: string[]): Args {
 	return out
 }
 
-function handleConfigCommand(argv: string[]): void {
+async function handleConfigCommand(argv: string[]): Promise<void> {
 	const [sub, ...rest] = argv
 	if (sub === 'path') {
+		if (rest.length) {
+			console.error('usage: td-code config path\n')
+			process.exit(1)
+		}
 		console.log(userConfigPath())
 		return
 	}
@@ -171,11 +179,196 @@ function handleConfigCommand(argv: string[]): void {
 		}
 		return
 	}
+	if (sub === 'edit') {
+		if (rest.includes('--help') || rest.includes('-h')) {
+			console.log(
+				'Usage: td-code config edit\nOpens ~/.td-code/config.json in $VISUAL/$EDITOR,\nfalling back to the OS opener. Creates a starter file first if missing.',
+			)
+			return
+		}
+		if (rest.length) {
+			console.error(`unknown flag for config edit: ${rest.join(' ')}\n`)
+			console.log('Usage: td-code config edit')
+			process.exit(1)
+		}
+		await editUserConfig()
+		return
+	}
+	if (sub === 'validate') {
+		if (rest.includes('--help') || rest.includes('-h')) {
+			console.log(
+				'Usage: td-code config validate\nParses ~/.td-code/config.json and reports problems without starting the server.',
+			)
+			return
+		}
+		if (rest.length) {
+			console.error(`unknown flag for config validate: ${rest.join(' ')}\n`)
+			console.log('Usage: td-code config validate')
+			process.exit(1)
+		}
+		validateUserConfig()
+		return
+	}
 	console.error(
 		sub ? `unknown config subcommand: ${sub}\n` : 'missing config subcommand\n',
 	)
-	console.log('Usage:\n  td-code config init [--force]\n  td-code config path')
+	console.log(
+		'Usage:\n  td-code config init [--force]\n  td-code config edit\n  td-code config validate\n  td-code config path',
+	)
 	process.exit(1)
+}
+
+/** Open the config in $VISUAL/$EDITOR (waited) or the OS opener (detached). */
+async function editUserConfig(): Promise<void> {
+	const file = userConfigPath()
+	if (!existsSync(file)) {
+		try {
+			initUserConfig(file, {})
+			console.log(`created starter config at ${file}`)
+		} catch (e) {
+			console.error(e instanceof Error ? e.message : String(e))
+			process.exit(1)
+		}
+	}
+	const editor = process.env.VISUAL || process.env.EDITOR
+	if (editor) {
+		const [bin, ...editorArgs] = splitCommand(editor)
+		if (!bin) {
+			console.error(`cannot parse $VISUAL/$EDITOR: ${JSON.stringify(editor)}`)
+			process.exit(1)
+		}
+		const code = await runInteractive(bin, [...editorArgs, file])
+		if (code !== 0) {
+			console.error(`editor exited with code ${code}: ${file}`)
+			process.exit(code)
+		}
+		// Report parse problems right away so a bad edit is caught early.
+		const {error} = loadUserConfig(file)
+		if (error) {
+			console.error(`saved, but the config has a problem:\n  ${error}`)
+			process.exit(1)
+		}
+		console.log(`saved ${file}`)
+		return
+	}
+	// No $EDITOR: hand the file to the OS (Termux/desktop file association).
+	try {
+		const {spawn} = await import('node:child_process')
+		const target =
+			process.env.TERMUX_VERSION || existsSync('/data/data/com.termux')
+				? (['termux-open', file] as string[])
+				: os.platform() === 'darwin'
+					? (['open', file] as string[])
+					: os.platform() === 'win32'
+						? (['cmd', '/c', 'start', '""', file] as string[])
+						: (['xdg-open', file] as string[])
+		const [bin, ...binArgs] = target as [string, ...string[]]
+		const child = spawn(bin, binArgs, {stdio: 'ignore', detached: true})
+		child.unref()
+		console.log(`opened ${file} (set $EDITOR to edit inside the terminal)`)
+	} catch (e) {
+		console.error(
+			`cannot open ${file}: ${e instanceof Error ? e.message : String(e)}\nSet $EDITOR to your editor and retry.`,
+		)
+		process.exit(1)
+	}
+}
+
+/** Split a $VISUAL/$EDITOR string into argv, honouring single/double quotes. */
+function splitCommand(cmd: string): string[] {
+	const out: string[] = []
+	let cur = ''
+	let quote: string | null = null
+	for (const ch of cmd.trim()) {
+		if (quote) {
+			if (ch === quote) quote = null
+			else cur += ch
+		} else if (ch === '"' || ch === "'") {
+			quote = ch
+		} else if (/\s/.test(ch)) {
+			if (cur) {
+				out.push(cur)
+				cur = ''
+			}
+		} else {
+			cur += ch
+		}
+	}
+	if (cur) out.push(cur)
+	return out
+}
+
+function runInteractive(bin: string, args: string[]): Promise<number> {
+	return import('node:child_process').then(
+		({spawn}) =>
+			new Promise<number>(resolve => {
+				const child = spawn(bin, args, {stdio: 'inherit'})
+				child.on('error', () => resolve(127))
+				child.on('close', code => resolve(code ?? 1))
+			}),
+	)
+}
+
+/** Parse the config and report problems without starting the server. */
+function validateUserConfig(): void {
+	const {config, path: file, error} = loadUserConfig()
+	console.log(`config: ${file}`)
+	if (error) {
+		console.error(`invalid: ${error}`)
+		process.exit(1)
+	}
+	if (!existsSync(file)) {
+		console.log('no config file — all defaults apply')
+		console.log('run `td-code config init` to create a starter file')
+		return
+	}
+	const keys = Object.keys(config).filter(k => k !== 'version')
+	if (!keys.length) {
+		console.log('valid but empty — all defaults apply')
+		return
+	}
+	console.log('valid:')
+	for (const k of keys) {
+		if (k === 'workspaces') continue
+		console.log(
+			`  ${k}: ${formatConfigValue(k, (config as Record<string, unknown>)[k])}`,
+		)
+	}
+	if (config.workspaces) {
+		const checked = checkWorkspacePaths(config.workspaces)
+		let bad = 0
+		for (const w of checked) {
+			const label = w.name ? `${w.raw} (name: ${w.name})` : w.raw
+			if (!w.exists) {
+				console.error(`  workspaces: ${label} -> missing: ${w.resolved}`)
+				bad++
+			} else if (!w.isDirectory) {
+				console.error(
+					`  workspaces: ${label} -> not a directory: ${w.resolved}`,
+				)
+				bad++
+			} else {
+				console.log(`  workspaces: ${label} -> ${w.resolved}`)
+			}
+		}
+		if (bad) {
+			console.error(`${bad} workspace(s) would fail at startup`)
+			process.exit(1)
+		}
+	}
+}
+
+/** Render a config value for `validate`, masking secrets. */
+function formatConfigValue(key: string, v: unknown): string {
+	if (key === 'authToken') return v ? '<set>' : '<unset>'
+	if (key === 'pairing' && v && typeof v === 'object' && !Array.isArray(v)) {
+		const p = {...(v as Record<string, unknown>)}
+		if (typeof p.code === 'string' && p.code) p.code = '<set>'
+		return JSON.stringify(p)
+	}
+	if (v === null) return 'null'
+	if (typeof v === 'object') return JSON.stringify(v)
+	return JSON.stringify(v) ?? String(v)
 }
 
 async function tryOpen(url: string) {
@@ -214,7 +407,7 @@ async function main() {
 	// Subcommands run before normal startup (no server, no config load needed
 	// beyond the target path).
 	if (rawArgv[0] === 'config') {
-		handleConfigCommand(rawArgv.slice(1))
+		await handleConfigCommand(rawArgv.slice(1))
 		return
 	}
 

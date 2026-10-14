@@ -16,7 +16,13 @@
  *   "workspaces": ["~/projects/api", {"path": "~/projects/web", "name": "web"}]
  * }
  */
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs'
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -310,6 +316,45 @@ export function parseEnvWorkspaces(
 		.map(s => s.trim())
 		.filter(Boolean)
 		.map(p => ({path: p}))
+}
+
+export interface WorkspaceCheck {
+	/** As written in the config. */
+	raw: string
+	name?: string
+	/** Absolute path after ~ expansion. */
+	resolved: string
+	exists: boolean
+	isDirectory: boolean
+}
+
+/**
+ * Check that each configured workspace exists and is a directory.
+ * Used by `td-code config validate` so a typo surfaces before startup.
+ */
+export function checkWorkspacePaths(
+	entries: WorkspaceEntry[],
+	cwd = process.cwd(),
+): WorkspaceCheck[] {
+	return entries.map(e => {
+		const resolved = resolveWorkspacePath(e.path, cwd)
+		let exists = false
+		let isDirectory = false
+		try {
+			const st = statSync(resolved)
+			exists = true
+			isDirectory = st.isDirectory()
+		} catch {
+			exists = false
+		}
+		return {
+			raw: e.path,
+			...(e.name ? {name: e.name} : {}),
+			resolved,
+			exists,
+			isDirectory,
+		}
+	})
 }
 
 export const STARTER_CONFIG_TEXT = `{

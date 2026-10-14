@@ -36,21 +36,23 @@ If you serve `~/storage`, run `termux-setup-storage` first.
 ```
 td-code [dir...] [options]
 td-code config init [--force]   write a starter ~/.td-code/config.json
+td-code config edit             open the config in $VISUAL/$EDITOR
+td-code config validate         check the config without starting
 td-code config path             print the config file path
 ```
 
-| Flag | Default | Notes |
-| ---- | ------- | ----- |
-| `dir...` | `.` or config workspaces | jailed roots, `..` escapes blocked; CLI dirs win over config |
-| `-p, --port` | `4444` | or `TD_CODE_PORT` env |
-| `--host` | `0.0.0.0` | use `127.0.0.1` to lock to device, or `TD_CODE_HOST` |
-| `--no-auth` | off | random token is printed unless disabled; `TD_CODE_TOKEN` overrides |
-| `--auth-token` | random | fixed token, e.g. `--auth-token secret` |
-| `--pairing` | off | also accept a short 6-digit pairing code (easier to type on a phone) |
-| `--pairing-code` | random | fixed pairing code (4–10 digits) |
-| `--no-watch` | off | disable chokidar file-watcher (saves RAM on low-end phones) |
-| `--no-terms` | off | disable the terminal (shell) feature entirely |
-| `--open` | off | try `termux-open-url` / `xdg-open` / `open` |
+| Flag             | Default                  | Notes                                                                |
+| ---------------- | ------------------------ | -------------------------------------------------------------------- |
+| `dir...`         | `.` or config workspaces | jailed roots, `..` escapes blocked; CLI dirs win over config         |
+| `-p, --port`     | `4444`                   | or `TD_CODE_PORT` env                                                |
+| `--host`         | `0.0.0.0`                | use `127.0.0.1` to lock to device, or `TD_CODE_HOST`                 |
+| `--no-auth`      | off                      | random token is printed unless disabled; `TD_CODE_TOKEN` overrides   |
+| `--auth-token`   | random                   | fixed token, e.g. `--auth-token secret`                              |
+| `--pairing`      | off                      | also accept a short 6-digit pairing code (easier to type on a phone) |
+| `--pairing-code` | random                   | fixed pairing code (4–10 digits)                                     |
+| `--no-watch`     | off                      | disable chokidar file-watcher (saves RAM on low-end phones)          |
+| `--no-terms`     | off                      | disable the terminal (shell) feature entirely                        |
+| `--open`         | off                      | try `termux-open-url` / `xdg-open` / `open`                          |
 
 Auth: append `?token=...` to the URL, or send `Authorization: Bearer ...` / `x-auth-token` header.
 
@@ -60,32 +62,39 @@ Optional, and everything in it is optional too. Precedence: **defaults < config 
 
 ```jsonc
 {
-  "port": 4444,
-  "host": "0.0.0.0",
+	"port": 4444,
+	"host": "0.0.0.0",
 
-  "auth": false,          // turn auth off entirely (trusted networks only)
-  "authToken": "secret",  // fixed token instead of a random one per start
+	"auth": false, // turn auth off entirely (trusted networks only)
+	"authToken": "secret", // fixed token instead of a random one per start
 
-  "pairing": {            // short code accepted in addition to the token
-    "enabled": true,      // random 6-digit code per start
-    "code": "482913",     // …or pin it (must be 4–10 digits)
-    "length": 6           // length of a generated code
-  },
+	"pairing": {
+		// short code accepted in addition to the token
+		"enabled": true, // random 6-digit code per start
+		"code": "482913", // …or pin it (must be 4–10 digits)
+		"length": 6, // length of a generated code
+	},
 
-  "watch": true,          // false = --no-watch
-  "terms": true,          // false = --no-terms
-  "open": false,          // launch a browser at startup
+	"watch": true, // false = --no-watch
+	"terms": true, // false = --no-terms
+	"open": false, // launch a browser at startup
 
-  "workspaces": [         // multi-root folders served without CLI args
-    "~/projects/api",     // CLI dirs win over this list;
-    { "path": "~/projects/web", "name": "web" }  // TD_CODE_WORKSPACES wins over both
-  ],
-  "version": 1
+	"workspaces": [
+		// multi-root folders served without CLI args
+		"~/projects/api", // CLI dirs win over this list;
+		{"path": "~/projects/web", "name": "web"}, // TD_CODE_WORKSPACES wins over both
+	],
+	"version": 1,
 }
 ```
 
 Generate the file with `td-code config init` (refuses to overwrite without
 `--force`); keys starting with `_` are comments and ignored by the parser.
+`td-code config edit` opens it in `$VISUAL`/`$EDITOR` (creating a starter
+first if missing, and reporting problems right after you save), falling back
+to the OS opener. `td-code config validate` parses it and checks that every
+workspace exists and is a directory, without starting the server — secrets
+(`authToken`, `pairing.code`) print as `<set>`.
 
 Unknown keys and wrong types are reported on startup and ignored (the file is never fatal), so a typo like `"authentification"` tells you instead of being silently dropped. A UTF-8 BOM (what Windows Notepad writes) is handled.
 
