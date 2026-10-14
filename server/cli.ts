@@ -4,6 +4,11 @@ import {existsSync, statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+	bashCompletionScript,
+	isCompletionShell,
+	SUPPORTED_COMPLETION_SHELLS,
+} from './completion.ts'
+import {
 	checkWorkspacePaths,
 	generatePairingCode,
 	initUserConfig,
@@ -27,6 +32,7 @@ Usage:
   td-code config edit             open the config in $VISUAL/$EDITOR
   td-code config validate         check the config without starting
   td-code config path             print the config file path
+  td-code completion bash         print a bash completion script
 
 Arguments:
   dir...                 directories to serve (default: . or config workspaces)
@@ -143,6 +149,28 @@ function parseArgs(argv: string[]): Args {
 		process.exit(1)
 	}
 	return out
+}
+
+async function handleCompletionCommand(argv: string[]): Promise<void> {
+	const [shell, ...rest] = argv
+	if (shell === undefined || shell === '--help' || shell === '-h') {
+		console.log(
+			'Usage: td-code completion bash\nPrints a bash completion script to stdout.\nInstall it with:\n  td-code completion bash | sudo tee /etc/bash_completion.d/td-code >/dev/null',
+		)
+		return
+	}
+	if (rest.length) {
+		console.error(`unexpected argument for completion: ${rest.join(' ')}\n`)
+		console.log('Usage: td-code completion bash')
+		process.exit(1)
+	}
+	if (!isCompletionShell(shell)) {
+		console.error(
+			`unsupported shell: ${shell} (supported: ${SUPPORTED_COMPLETION_SHELLS.join(', ')})\n`,
+		)
+		process.exit(1)
+	}
+	process.stdout.write(bashCompletionScript())
 }
 
 async function handleConfigCommand(argv: string[]): Promise<void> {
@@ -408,6 +436,10 @@ async function main() {
 	// beyond the target path).
 	if (rawArgv[0] === 'config') {
 		await handleConfigCommand(rawArgv.slice(1))
+		return
+	}
+	if (rawArgv[0] === 'completion') {
+		handleCompletionCommand(rawArgv.slice(1))
 		return
 	}
 

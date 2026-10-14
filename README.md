@@ -39,7 +39,13 @@ td-code config init [--force]   write a starter ~/.td-code/config.json
 td-code config edit             open the config in $VISUAL/$EDITOR
 td-code config validate         check the config without starting
 td-code config path             print the config file path
+td-code completion bash         print a bash completion script
 ```
+
+Bash completion (`td-code completion bash | sudo tee /etc/bash_completion.d/td-code`):
+flags, `config`/`completion` subcommands, `config init --force`, `--host`
+values, and directory names (with trailing `/` so completion continues
+inside).
 
 | Flag             | Default                  | Notes                                                                |
 | ---------------- | ------------------------ | -------------------------------------------------------------------- |
