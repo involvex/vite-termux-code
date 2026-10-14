@@ -79,9 +79,7 @@ async function loadExtension(
 
 	// Try to load the module
 	try {
-		// In browser, we need to fetch the JS module
-		// For local extensions, we use dynamic import with a virtual path
-		const moduleUrl = `${extensionPath}/${manifest.main}`
+		const moduleUrl = joinModuleUrl(extensionPath, manifest.main)
 		const module = await importModule(moduleUrl)
 		ext.exports = module
 	} catch (err) {
@@ -93,25 +91,27 @@ async function loadExtension(
 	return ext
 }
 
+/** Join an extension base path with its `main` entry, without a double slash. */
+function joinModuleUrl(base: string, main: string): string {
+	const trimmed = base.replace(/\/+$/, '')
+	return main.startsWith('/') ? `${trimmed}${main}` : `${trimmed}/${main}`
+}
+
 /**
- * Import a module from a URL (browser-compatible)
+ * Import an extension module. Works for same-origin paths (`/ext/…`) and for
+ * absolute http(s) URLs (a CDN like unpkg/jsdelivr, or any self-hosted
+ * extension server) — dynamic `import()` handles both natively, as long as the
+ * server sends CORS headers. Anything else (file:, data:, bare specifiers) is
+ * rejected rather than silently pulled into the page's module graph.
  */
 async function importModule(url: string): Promise<any> {
-	// In development, we can use dynamic import if served by Vite
-	// In production, extensions would be bundled and served from dist/
-	// For now, we'll fetch and eval (not ideal but works for prototype)
-
-	// Check if it's a local extension served by our dev server
-	if (url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) {
-		// Use dynamic import for local modules
-		return import(/* @vite-ignore */ url)
+	const isPath =
+		url.startsWith('/') || url.startsWith('./') || url.startsWith('../')
+	const isHttp = /^https?:\/\//i.test(url)
+	if (!isPath && !isHttp) {
+		throw new Error(`Unsupported extension module URL: ${url}`)
 	}
-
-	// For external URLs, we'd need a different approach (fetch + eval, or importmap)
-	// This is a limitation of browser-based extension loading
-	throw new Error(
-		`Cannot import module from ${url}. Use local paths or bundling.`,
-	)
+	return import(/* @vite-ignore */ url)
 }
 
 /**
@@ -278,7 +278,7 @@ export async function installExtension(
 		const pkg = url.slice(4)
 		extensionPath = `https://unpkg.com/${pkg}@latest`
 	} else {
-		extensionPath = url.replace(/package\.json$/, '')
+		extensionPath = url.replace(/package\.json$/, '').replace(/\/+$/, '')
 	}
 
 	// Load and activate
@@ -383,6 +383,31 @@ export function setExtensionConfigValue(
  */
 export function getActiveExtensions(): Extension[] {
 	return Array.from(extensions.values()).filter(e => e.isActive)
+}
+
+/**
+ * Run a command contributed by an extension, activating it first when needed.
+ * This is what the Command Palette calls, so an extension can stay dormant
+ * until one of its commands is used.
+ */
+export async function runExtensionCommand(id: string, ...args: unknown[]) {
+	const owner = Array.from(extensions.values()).find(e =>
+		e.manifest.contributes?.commands?.some(c => c.command === id),
+	)
+	if (!owner) throw new Error(`no extension contributes the command: ${id}`)
+
+	// Activate on demand: either the extension asked for `onCommand:<id>` /
+	// `onCommand:*`, or it declares the command in contributes.commands (the
+	// implicit activation VSCode does) — otherwise invoking it could be a no-op.
+	const wantsActivation = shouldActivateForCommand(owner.manifest, id)
+	if (!owner.isActive && wantsActivation) {
+		await activateExtension(owner.id)
+	}
+
+	if (!getRegisteredCommands().some(c => c.id === id)) {
+		throw new Error(`command not registered: ${id}`)
+	}
+	await executeCommand(id, ...args)
 }
 
 /**

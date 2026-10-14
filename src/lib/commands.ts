@@ -1,6 +1,7 @@
 import {useAppStore, type Panel} from '../store/useAppStore'
 import {api} from './api'
 import {dapClient} from './dap'
+import {getRegisteredCommands, runExtensionCommand} from './extensionHost'
 import {nextThemeId, THEMES} from './themes'
 
 export interface Command {
@@ -294,6 +295,22 @@ export function allCommands(): Command[] {
 				theme: nextThemeId(useAppStore.getState().settings.theme),
 			}),
 	})
+
+	// Extension-contributed commands. Titles come from the extension manifest,
+	// and runExtensionCommand() activates the extension on demand when it
+	// declared onCommand:<id>, so dormant extensions stay dormant until used.
+	for (const ext of getRegisteredCommands()) {
+		cmds.push({
+			id: `ext:${ext.id}`,
+			title: `${ext.category}: ${ext.title}`,
+			hint: ext.extension,
+			run: async () => {
+				const status = useAppStore.getState().setStatus
+				status(`running ${ext.title}…`)
+				await runExtensionCommand(ext.id)
+			},
+		})
+	}
 
 	return cmds.sort((a, b) => a.title.localeCompare(b.title))
 }

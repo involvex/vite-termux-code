@@ -72,8 +72,12 @@ bun run smoke    # headless end-to-end smoke test against the built app
 Chrome/Edge over the DevTools protocol, and asserts the critical path: the app
 boots, the Explorer lists files, opening a file mounts CodeMirror, the
 breakpoint gutter toggles + persists a breakpoint, the terminal starts a PTY
-session, and no pane-failure UI or console error appears. It exits non-zero on
+session, the bundled example extension installs and its command runs from the
+palette, and no pane-failure UI or console error appears. It exits non-zero on
 the first failing check, so a broken lazy pane can't ship unnoticed.
+
+CI (`.github/workflows/ci.yml`) runs `check` → `test` → `lint` → `build` →
+`smoke` on every push and PR, and uploads `dist/` as an artifact.
 
 ```bash
 bun run smoke -- --url=http://127.0.0.1:4444   # test an already running server
@@ -166,7 +170,25 @@ Click the gutter in the editor to set breakpoints (persisted per file, `Alt+Clic
 
 ## Command Palette (⌘ button, Ctrl+Shift+P / Ctrl+P / F1)
 
-Fuzzy-matched command list: switch panels, toggle sidebar/terminal, new/save/close files, stage/unstage all, restart the language server, switch themes, reset settings. Ignored while the browser tab or terminal has focus.
+Fuzzy-matched command list: switch panels, toggle sidebar/terminal, new/save/close files, stage/unstage all, restart the language server, switch themes, reset settings — plus every command contributed by an installed extension. Ignored while the browser tab or terminal has focus.
+
+## Extensions (🧩 tab, 🏪 Marketplace)
+
+Third-party extensions are plain ESM modules with an `activate(ctx)` export, loaded on demand with `import()`:
+
+1. Open the 🧩 tab and paste a manifest URL (same-origin, GitHub, `npm:<pkg>`, or any self-hosted extension server).
+2. The extension registers commands, sidebar views, settings, and event handlers; its commands show up in the Command Palette as `Category: Title`.
+3. Extensions that declare `onCommand:<id>` (or simply contribute the command) stay dormant until you run them.
+
+A runnable example ships in `public/extensions/hello-world/` and is copied verbatim into `dist/`, so it is always installable from your own server:
+
+```
+http://<your-td-code-host>/extensions/hello-world/package.json
+```
+
+Extension API highlights: `registerCommand`, `registerView`, `onDidSaveFile` / `onDidChangeFile` / `onDidCreateFile` / `onDidDeleteFile`, `onDidOpenTab` / `onDidCloseTab`, `onDidChangeActiveWorkspace`, `readFile` / `writeFile` / `listFiles` / `createTerminal`, `globalStorage` / `workspaceStorage`, `showMessage` / `showInputBox` / `showQuickPick`, and per-extension settings generated from `contributes.configuration` (⚙ on the extension card).
+
+Extensions run with full trust in the page (like VSCode without a sandbox), so only install code you trust.
 
 ## Themes & Settings
 

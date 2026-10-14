@@ -135,6 +135,8 @@ const commandRegistry = new Map<
 		thisArg?: any
 		title: string
 		category?: string
+		/** id of the extension that registered it, for the palette hint */
+		extension?: string
 	}
 >()
 
@@ -187,11 +189,17 @@ export function createExtensionContext(
 			if (commandRegistry.has(command)) {
 				console.warn(`Command ${command} already registered`)
 			}
+			// Prefer the title/category declared in the extension manifest so the
+			// Command Palette shows "Category: Title" like built-in commands.
+			const contributed = _manifest.contributes?.commands?.find(
+				c => c.command === command,
+			)
 			commandRegistry.set(command, {
 				handler,
 				thisArg,
-				title: command,
-				category: 'Extension',
+				title: contributed?.title ?? command,
+				category: contributed?.category ?? extensionId,
+				extension: extensionId,
 			})
 			return addSubscription({
 				dispose: () => commandRegistry.delete(command),
@@ -371,12 +379,23 @@ export function getRegisteredCommands(): Array<{
 	id: string
 	title: string
 	category: string
+	extension: string
 }> {
-	const result: Array<{id: string; title: string; category: string}> = []
+	const result: Array<{
+		id: string
+		title: string
+		category: string
+		extension: string
+	}> = []
 	for (const [id, cmd] of commandRegistry) {
-		result.push({id, title: cmd.title, category: cmd.category ?? 'Extension'})
+		result.push({
+			id,
+			title: cmd.title,
+			category: cmd.category ?? 'Extension',
+			extension: cmd.extension ?? 'extension',
+		})
 	}
-	return result
+	return result.sort((a, b) => a.title.localeCompare(b.title))
 }
 
 /**

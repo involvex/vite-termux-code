@@ -128,6 +128,12 @@ let profileDir = ''
 
 async function launchBrowser(bin: string): Promise<string> {
 	profileDir = mkdtempSync(join(tmpdir(), 'td-code-smoke-'))
+	// In containers/CI the Chrome sandbox is unavailable (no user namespaces) and
+	// /dev/shm is tiny, so relax those two only where it's actually needed.
+	const isCI = process.env.CI === 'true' || process.env.CI === '1'
+	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
+	const containerFlags =
+		isCI || isRoot ? ['--no-sandbox', '--disable-dev-shm-usage'] : []
 	browserProc = spawn(
 		bin,
 		[
@@ -138,6 +144,7 @@ async function launchBrowser(bin: string): Promise<string> {
 			'--disable-extensions',
 			'--disable-gpu',
 			'--disable-background-networking',
+			...containerFlags,
 			`--user-data-dir=${profileDir}`,
 			'about:blank',
 		],
@@ -442,7 +449,110 @@ async function main() {
 	}
 	record('terminal drawer opens an xterm session', term)
 
-	// 6. no failed-pane text anywhere
+	// 6. bundled example extension: install, then run its command from the palette
+	//    (covers the whole extension path: manifest fetch, module import,
+	//     activate(), registerCommand(), palette wiring, on-demand activation)
+	const manifestUrl = `${new URL(url).origin}/extensions/hello-world/package.json`
+	await cdp.evaluate(`(() => {
+		Array.from(document.querySelectorAll('.act'))
+			.find(b => (b.getAttribute('title') || '') === 'Extensions')
+			?.click();
+		return true;
+	})()`)
+	let installed = false
+	try {
+		await waitFor(
+			async () =>
+				(await cdp.evaluate<boolean>(
+					`!!Array.from(document.querySelectorAll('input')).find(i => (i.placeholder || '').includes('GitHub URL'))`,
+				)) === true,
+			opts.timeoutMs,
+			'extensions panel install box',
+		)
+		await cdp.evaluate(`(() => {
+			const inp = Array.from(document.querySelectorAll('input'))
+				.find(i => (i.placeholder || '').includes('GitHub URL'));
+			const setter = Object.getOwnPropertyDescriptor(
+				window.HTMLInputElement.prototype, 'value').set;
+			setter.call(inp, ${JSON.stringify(manifestUrl)});
+			inp.dispatchEvent(new Event('input', {bubbles: true}));
+			Array.from(document.querySelectorAll('button'))
+				.find(b => (b.getAttribute('title') || '') === 'Install from URL')
+				?.click();
+			return true;
+		})()`)
+		await waitFor(
+			async () =>
+				(await cdp.evaluate<boolean>(
+					`!!Array.from(document.querySelectorAll('.extension-item')).find(i => /Hello World/.test(i.textContent || ''))`,
+				)) === true,
+			opts.timeoutMs,
+			'installed extension card',
+		)
+		installed = true
+	} catch {
+		installed = false
+	}
+	record('bundled example extension installs', installed, manifestUrl)
+
+	let ranCommand = false
+	if (installed) {
+		await cdp.evaluate(`(() => {
+			Array.from(document.querySelectorAll('.act'))
+				.find(b => (b.getAttribute('title') || '').includes('Command Palette'))
+				?.click();
+			return true;
+		})()`)
+		await waitFor(
+			async () =>
+				(await cdp.evaluate<boolean>(
+					`!!document.querySelector('.palette-input')`,
+				)) === true,
+			opts.timeoutMs,
+			'command palette input',
+		)
+		await cdp.evaluate(`(() => {
+			const inp = document.querySelector('.palette-input');
+			const setter = Object.getOwnPropertyDescriptor(
+				window.HTMLInputElement.prototype, 'value').set;
+			setter.call(inp, 'say hi');
+			inp.dispatchEvent(new Event('input', {bubbles: true}));
+			return true;
+		})()`)
+		const listed = await waitFor(
+			async () =>
+				(await cdp.evaluate<boolean>(
+					`!!Array.from(document.querySelectorAll('.palette-item')).find(i => /Say Hi/.test(i.textContent || ''))`,
+				)) === true,
+			opts.timeoutMs,
+			'extension command in palette',
+		)
+		record('extension command appears in the palette', listed)
+		if (listed) {
+			await cdp.evaluate(`(() => {
+				Array.from(document.querySelectorAll('.palette-item'))
+					.find(i => /Say Hi/.test(i.textContent || ''))
+					?.click();
+				return true;
+			})()`)
+			try {
+				await waitFor(
+					async () =>
+						(await cdp.evaluate<boolean>(
+							`/td-code\\.hello-world/.test(document.querySelector('.statusbar')?.innerText || '')`,
+						)) === true,
+					opts.timeoutMs,
+					'extension command output',
+				)
+				ranCommand = true
+			} catch {
+				ranCommand = false
+			}
+		}
+		record('extension command runs from the palette', ranCommand)
+	}
+
+	// 7. no failed-pane text anywhere
 	const failedText = await cdp.evaluate<string | null>(`(() => {
 		const el = document.querySelector('.pane-failure');
 		return el ? el.innerText.slice(0, 400) : null;

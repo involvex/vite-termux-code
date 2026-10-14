@@ -1,0 +1,55 @@
+{
+	"name": "hello-world",
+	"displayName": "Hello World",
+	"version": "1.0.0",
+	"description": "Minimal td-code extension: two commands, a view, and settings",
+	"keywords": [
+		"sample",
+		"example"
+	],
+	"license": "MIT",
+	"publisher": "td-code",
+	"main": "extension.js",
+	"td-code": {
+		"categories": [
+			"Other"
+		],
+		"activationEvents": [
+			"onCommand:hello.sayHi"
+		],
+		"contributes": {
+			"commands": [
+				{
+					"command": "hello.sayHi",
+					"title": "Say Hi",
+					"category": "Hello"
+				},
+				{
+					"command": "hello.insertTimestamp",
+					"title": "Insert Timestamp Into Scratch File",
+					"category": "Hello"
+				}
+			],
+			"configuration": {
+				"title": "Hello World",
+				"properties": {
+					"greeting": {
+						"type": "string",
+						"default": "Hello",
+						"description": "Word used by the Say Hi command"
+					},
+					"shout": {
+						"type": "boolean",
+						"default": false,
+						"description": "Upper-case the greeting"
+					},
+					"targetFile": {
+						"type": "string",
+						"default": "hello-world.txt",
+						"description": "File the timestamp command appends to"
+					}
+				}
+			}
+		}
+	}
+}
