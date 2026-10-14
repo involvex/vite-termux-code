@@ -60,6 +60,33 @@ bun run dev          # Vite UI on 0.0.0.0:4444, proxies /api + /ws
 
 Production: `bun run build` → `dist/` (UI) + `dist/cli.js` (server, `bin: td-code`).
 
+### Tests
+
+```bash
+bun run check    # tsc -b --noEmit (src + server + scripts + tests)
+bun run test     # bun test (unit tests, no deps)
+bun run smoke    # headless end-to-end smoke test against the built app
+```
+
+`bun run smoke` boots `dist/cli.js` on a free port, drives a real headless
+Chrome/Edge over the DevTools protocol, and asserts the critical path: the app
+boots, the Explorer lists files, opening a file mounts CodeMirror, the
+breakpoint gutter toggles + persists a breakpoint, the terminal starts a PTY
+session, and no pane-failure UI or console error appears. It exits non-zero on
+the first failing check, so a broken lazy pane can't ship unnoticed.
+
+```bash
+bun run smoke -- --url=http://127.0.0.1:4444   # test an already running server
+bun run smoke -- --dir=../some/path           # serve another directory
+bun run smoke -- --browser=/path/to/chrome    # pick a browser
+```
+
+If a lazy pane (editor, terminal) fails to load, the UI now says which kind of
+failure it is instead of blaming the network: a **chunk load failure** (offline,
+404, stale `index.html` after a redeploy) vs. a **render crash** (the code ran
+and threw). Both show the underlying error and offer Retry / Copy details /
+Reload window.
+
 ## API
 
 - `GET /api/health`

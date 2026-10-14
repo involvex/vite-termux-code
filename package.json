@@ -18,7 +18,9 @@
 		"lint": "oxlint",
 		"lint:fix": "oxlint --fix",
 		"preview": "vite preview",
-		"serve": "bun ./dist/cli.js"
+		"serve": "bun ./dist/cli.js",
+		"smoke": "bun run ./scripts/smoke.ts",
+		"test": "bun test"
 	},
 	"prettier": "@involvex/prettier-config",
 	"dependencies": {

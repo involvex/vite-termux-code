@@ -8,6 +8,7 @@ import ExtensionsPanel from './components/ExtensionsPanel'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
 import MarketplacePanel from './components/MarketplacePanel'
+import PaneFailure from './components/PaneFailure'
 import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
@@ -409,17 +410,13 @@ export default function App() {
 								<div className="muted">loading terminal…</div>
 							</div>
 						}
-						failed={retry => (
+						failed={(retry, info) => (
 							<div className="term-drawer">
-								<div className="error">
-									Terminal failed to load (network?).{' '}
-									<button
-										className="chip"
-										onClick={retry}
-									>
-										Retry
-									</button>
-								</div>
+								<PaneFailure
+									label="terminal"
+									retry={retry}
+									info={info}
+								/>
 							</div>
 						)}
 						props={{visible: terminalOpen}}

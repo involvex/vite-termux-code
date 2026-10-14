@@ -1362,3 +1362,74 @@ body {
 	padding: 10px;
 	border-top: 1px solid var(--border);
 }
+
+/* lazy pane failure (chunk load vs render crash) */
+.pane-failure {
+	max-width: 640px;
+	margin: 0 auto;
+	padding: 28px 20px;
+	text-align: left;
+}
+
+.term-drawer .pane-failure {
+	padding: 14px 16px;
+}
+
+.pane-failure-title {
+	font-size: 16px;
+	font-weight: 600;
+	margin: 0 0 8px;
+	color: var(--text);
+}
+
+.pane-failure-hint {
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--text-dim);
+	margin: 0 0 10px;
+}
+
+.pane-failure-url {
+	font-size: 12px;
+	margin: 0 0 10px;
+	word-break: break-all;
+}
+
+.pane-failure-url code {
+	font-family: var(--mono);
+	background: var(--bg-input);
+	border-radius: 4px;
+	padding: 2px 6px;
+}
+
+.pane-failure-details {
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-side);
+	padding: 8px 10px;
+	margin-bottom: 12px;
+	font-size: 12px;
+}
+
+.pane-failure-details summary {
+	cursor: pointer;
+	font-family: var(--mono);
+	word-break: break-word;
+}
+
+.pane-failure-details pre {
+	margin: 8px 0 0;
+	max-height: 220px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.pane-failure-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}

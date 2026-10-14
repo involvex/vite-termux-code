@@ -1,6 +1,7 @@
 import {api} from '../lib/api'
 import {notifyFileSaved} from '../lib/extensionApi'
 import {useAppStore} from '../store/useAppStore'
+import PaneFailure from './PaneFailure'
 import Reloadable from './Reloadable'
 
 export default function EditorTabs() {
@@ -111,16 +112,12 @@ export default function EditorTabs() {
 					<Reloadable
 						factory={() => import('./CodeEditor')}
 						loading={<div className="muted">loading editor…</div>}
-						failed={retry => (
-							<div className="editor-empty">
-								<p>Editor failed to load (network?).</p>
-								<button
-									className="save-btn"
-									onClick={retry}
-								>
-									Retry
-								</button>
-							</div>
+						failed={(retry, info) => (
+							<PaneFailure
+								label="editor"
+								retry={retry}
+								info={info}
+							/>
 						)}
 						childKey={active.path}
 						props={{filePath: active.path}}

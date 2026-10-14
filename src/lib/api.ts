@@ -316,11 +316,15 @@ export function termWsUrl(id: string): string {
 }
 
 export function dapWsUrl(workspace?: number): string {
-	const base = withToken(`${wsBase()}/dap`)
-	if (workspace !== undefined) {
-		return `${base}&workspace=${workspace}`
-	}
-	return base
+	const t = getToken()
+	// `withToken` only adds '?token=…' when auth is on, so the separator has to
+	// be chosen here — appending '&workspace=' blindly produced the invalid
+	// path '/dap&workspace=0' and the server never matched the upgrade route.
+	const parts = [
+		t ? `token=${encodeURIComponent(t)}` : '',
+		workspace !== undefined ? `workspace=${workspace}` : '',
+	].filter(Boolean)
+	return parts.length ? `${wsBase()}/dap?${parts.join('&')}` : `${wsBase()}/dap`
 }
 
 export function lspWsUrl(lang: string, workspace?: number): string {

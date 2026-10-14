@@ -174,6 +174,10 @@ function editBpCond(
 function bpGutterExt(filePath: string, workspace?: number) {
 	return gutter({
 		class: 'bp-gutter',
+		// Without this, CodeMirror only creates gutter elements for lines that
+		// already have a marker — leaving an empty, unclickable gutter, so a
+		// breakpoint could never be set by clicking the margin.
+		renderEmptyElements: true,
 		markers: v => {
 			const set = v.state.field(bpField, false)
 			if (!set || set.size === 0) return RangeSet.empty
