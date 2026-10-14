@@ -44,11 +44,42 @@ td-code [dir] [-p PORT] [--host ADDR] [--no-auth] [--auth-token TOKEN] [--no-wat
 | `--host` | `0.0.0.0` | use `127.0.0.1` to lock to device, or `TD_CODE_HOST` |
 | `--no-auth` | off | random token is printed unless disabled; `TD_CODE_TOKEN` overrides |
 | `--auth-token` | random | fixed token, e.g. `--auth-token secret` |
+| `--pairing` | off | also accept a short 6-digit pairing code (easier to type on a phone) |
+| `--pairing-code` | random | fixed pairing code (4–10 digits) |
 | `--no-watch` | off | disable chokidar file-watcher (saves RAM on low-end phones) |
 | `--no-terms` | off | disable the terminal (shell) feature entirely |
 | `--open` | off | try `termux-open-url` / `xdg-open` / `open` |
 
 Auth: append `?token=...` to the URL, or send `Authorization: Bearer ...` / `x-auth-token` header.
+
+### User config: `~/.td-code/config.json`
+
+Optional, and everything in it is optional too. Precedence: **defaults < config file < CLI flags < `TD_CODE_*` env vars**.
+
+```jsonc
+{
+  "port": 4444,
+  "host": "0.0.0.0",
+
+  "auth": false,          // turn auth off entirely (trusted networks only)
+  "authToken": "secret",  // fixed token instead of a random one per start
+
+  "pairing": {            // short code accepted in addition to the token
+    "enabled": true,      // random 6-digit code per start
+    "code": "482913",     // …or pin it (must be 4–10 digits)
+    "length": 6           // length of a generated code
+  },
+
+  "watch": true,          // false = --no-watch
+  "terms": true,          // false = --no-terms
+  "open": false,          // launch a browser at startup
+  "version": 1
+}
+```
+
+Unknown keys and wrong types are reported on startup and ignored (the file is never fatal), so a typo like `"authentification"` tells you instead of being silently dropped. A UTF-8 BOM (what Windows Notepad writes) is handled.
+
+**Pairing code** — when enabled, the code is printed at startup and accepted anywhere a token is (`?code=…`, `x-auth-token`, or typed into the in-app pairing screen). Without a token in the URL the editor shows a pairing prompt instead of the IDE, so you can open `http://<host>:4444/` on your phone and type 6 digits instead of pasting a 24-char token. `--pairing`/`--pairing-code` do the same for one-off runs.
 
 ## Dev
 

@@ -93,14 +93,51 @@ export interface Workspace {
 	index: number
 }
 
+/**
+ * Pairing screen state. When the server answers 401 with `pairing: true`,
+ * App renders the code prompt instead of the IDE.
+ */
+let unauthorizedHandler: (() => void) | null = null
+
+export function onUnauthorized(fn: (() => void) | null): void {
+	unauthorizedHandler = fn
+}
+
+function notifyUnauthorized() {
+	try {
+		unauthorizedHandler?.()
+	} catch {
+		/* ignore */
+	}
+}
+
 function getToken(): string {
 	const url = new URL(window.location.href)
-	const q = url.searchParams.get('token')
+	// ?code= is the pairing-code entry point (short, typeable on a phone);
+	// it is stored exactly like a token because the server accepts either.
+	const q = url.searchParams.get('token') ?? url.searchParams.get('code')
 	if (q) {
 		sessionStorage.setItem('td-code-token', q)
+		// Don't leave the credential in the address bar / history / referrers.
+		url.searchParams.delete('token')
+		url.searchParams.delete('code')
+		window.history.replaceState({}, '', url.toString())
 		return q
 	}
 	return sessionStorage.getItem('td-code-token') ?? ''
+}
+
+/** Store a pairing code as the session credential. */
+export function submitPairingCode(code: string): boolean {
+	const clean = code.trim()
+	if (!clean) return false
+	sessionStorage.setItem('td-code-token', clean)
+	notifyUnauthorized()
+	return true
+}
+
+export function clearPairingCode(): void {
+	sessionStorage.removeItem('td-code-token')
 }
 
 export function authQuery(): string {
@@ -120,6 +157,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 			...(init?.headers ?? {}),
 		},
 	})
+	if (res.status === 401) {
+		// Stale credential, or we still need to pair.
+		let pairing = false
+		try {
+			pairing = Boolean(
+				((await res.clone().json()) as {pairing?: boolean}).pairing,
+			)
+		} catch {
+			/* ignore */
+		}
+		if (pairing || t) notifyUnauthorized()
+	}
 	if (!res.ok) {
 		let msg = res.statusText
 		try {
@@ -142,8 +191,16 @@ function withWorkspace(path: string, workspace?: number): string {
 }
 
 export const api = {
+	/** Store/clear the pairing code (used by PairingPrompt). */
+	setPairingCode: submitPairingCode,
+	clearPairingCode,
 	health: () =>
 		req<{ok: boolean; roots: string[]; version: string}>('/api/health'),
+	/**
+	 * Authenticated round-trip used to verify a pairing code. Unlike /api/health
+	 * (which is deliberately public) this 401s unless the credential is good.
+	 */
+	authCheck: () => req<{ok: boolean}>('/api/auth/check'),
 	workspaces: () => req<{workspaces: Workspace[]}>('/api/workspaces'),
 	addWorkspace: (rootDir: string, name?: string) =>
 		req<{ok: boolean; rootDir: string}>('/api/workspaces', {

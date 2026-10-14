@@ -3,6 +3,7 @@ import {randomBytes} from 'node:crypto'
 import {existsSync, statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {generatePairingCode, loadUserConfig, userConfigPath} from './config.ts'
 import {lanIps, startServer} from './server.ts'
 
 const VERSION = '0.1.0'
@@ -23,6 +24,9 @@ Options:
   --host <addr>          host to bind (default: ${DEFAULT_HOST})
   --no-auth              disable token auth (default: enabled with random token)
   --auth-token <token>   use a fixed token instead of generating one
+  --pairing              accept a short pairing code (6 digits) in addition
+                         to the token — handy for typing on a phone
+  --pairing-code <code>  use a fixed pairing code (4-10 digits)
   --no-watch             disable file watcher broadcasts
   --no-terms             disable the terminal (shell) feature
   --open                 try to open the browser (termux-open-url / xdg-open / open)
@@ -33,7 +37,12 @@ Examples:
   td-code .                       # serve cwd on 0.0.0.0:4444 with token
   td-code ~/myproj -p 8080 --no-auth
   td-code . --host 127.0.0.1 --auth-token secret --open
+  td-code . --pairing             # also accept a 6-digit pairing code
   td-code project1 project2       # serve multiple directories (multi-root workspace)
+
+Config file (optional): ${userConfigPath()}
+  { "port": 4444, "auth": false, "pairing": { "enabled": true } }
+  Precedence: defaults < config file < CLI flags < TD_CODE_* env vars.
 
 In another Termux session run e.g. opencode, then open its URL
 in the Browser tab (default quick-link http://localhost:4096).
@@ -42,10 +51,12 @@ in the Browser tab (default quick-link http://localhost:4096).
 
 interface Args {
 	dirs: string[]
-	port: number
-	host: string
+	port: number | null
+	host: string | null
 	noAuth: boolean
 	authToken: string | null
+	pairing: boolean
+	pairingCode: string | null
 	noWatch: boolean
 	noTerms: boolean
 	open: boolean
@@ -54,10 +65,12 @@ interface Args {
 function parseArgs(argv: string[]): Args {
 	const out: Args = {
 		dirs: [],
-		port: DEFAULT_PORT,
-		host: DEFAULT_HOST,
+		port: null,
+		host: null,
 		noAuth: false,
 		authToken: null,
+		pairing: false,
+		pairingCode: null,
 		noWatch: false,
 		noTerms: false,
 		open: false,
@@ -89,6 +102,12 @@ function parseArgs(argv: string[]): Args {
 			out.authToken = argv[++i] ?? null
 		} else if (a.startsWith('--auth-token=')) {
 			out.authToken = a.split('=')[1]
+		} else if (a === '--pairing') {
+			out.pairing = true
+		} else if (a === '--pairing-code') {
+			out.pairingCode = argv[++i] ?? null
+		} else if (a.startsWith('--pairing-code=')) {
+			out.pairingCode = a.split('=')[1]
 		} else if (a === '--no-watch') {
 			out.noWatch = true
 		} else if (a === '--no-terms') {
@@ -102,6 +121,10 @@ function parseArgs(argv: string[]): Args {
 		} else {
 			out.dirs.push(a)
 		}
+	}
+	if (out.pairingCode !== null && !/^\d{4,10}$/.test(out.pairingCode)) {
+		console.error(`--pairing-code must be 4-10 digits, got: ${out.pairingCode}`)
+		process.exit(1)
 	}
 	if (out.dirs.length === 0) out.dirs = ['.']
 	return out
@@ -139,6 +162,15 @@ async function tryOpen(url: string) {
 
 async function main() {
 	const args = parseArgs(process.argv.slice(2))
+
+	// Optional user config; a broken file is reported but never fatal.
+	const {config, path: configPath, error: configError} = loadUserConfig()
+	if (configError)
+		console.warn(`[td-code] ignoring ${configPath}: ${configError}`)
+	else if (Object.keys(config).length) {
+		console.log(`[td-code] using config ${configPath}`)
+	}
+
 	const rootDirs = args.dirs.map(d =>
 		path.resolve(process.cwd(), d.replace(/^~/, os.homedir())),
 	)
@@ -155,29 +187,51 @@ async function main() {
 		}
 	}
 
+	// defaults < config file < CLI flags < TD_CODE_* env vars
+	const port = Number(
+		process.env.TD_CODE_PORT ?? args.port ?? config.port ?? DEFAULT_PORT,
+	)
+	const host =
+		process.env.TD_CODE_HOST ?? args.host ?? config.host ?? DEFAULT_HOST
+
+	// auth: explicit --no-auth or config "auth": false disables it entirely.
+	const envToken = process.env.TD_CODE_TOKEN
+	const envNoAuth =
+		process.env.TD_CODE_AUTH === '0' || process.env.TD_CODE_NO_AUTH === '1'
+	const authOff =
+		envToken === undefined &&
+		(envNoAuth || args.noAuth || config.auth === false)
 	let token: string | null = null
-	if (!args.noAuth) {
-		token = args.authToken ?? randomBytes(16).toString('hex').slice(0, 24)
+	if (!authOff) {
+		token =
+			envToken ??
+			args.authToken ??
+			config.authToken ??
+			randomBytes(16).toString('hex').slice(0, 24)
 	}
 
-	// env overrides (useful in Termux): TD_CODE_PORT / TD_CODE_HOST / TD_CODE_TOKEN
-	const port = Number(process.env.TD_CODE_PORT ?? args.port)
-	const host = process.env.TD_CODE_HOST ?? args.host
-	const envToken = process.env.TD_CODE_TOKEN
-	if (envToken) token = envToken
-	if (args.noAuth && !envToken) token = null
+	// pairing: a short, typeable code accepted alongside the token
+	const fixedCode = args.pairingCode ?? config.pairing?.code ?? null
+	const pairingOn =
+		fixedCode !== null || args.pairing || config.pairing?.enabled === true
+	// A pairing code is meaningless without auth to protect, so it implies auth on.
+	const pairingCode =
+		pairingOn && token !== null
+			? (fixedCode ?? generatePairingCode(config.pairing?.length ?? 6))
+			: null
 
 	await startServer({
 		rootDirs,
 		port,
 		host,
 		authToken: token,
-		noWatch: args.noWatch,
-		noTerms: args.noTerms,
+		pairingCode,
+		noWatch: args.noWatch || config.watch === false,
+		noTerms: args.noTerms || config.terms === false,
 		version: VERSION,
 	})
 
-	if (args.open) {
+	if (args.open || config.open) {
 		const base = `http://localhost:${port}/`
 		await tryOpen(token ? `${base}?token=${token}` : base)
 		void lanIps

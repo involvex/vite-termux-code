@@ -34,6 +34,8 @@ export interface ServeOptions {
 	port: number
 	host: string
 	authToken: string | null
+	/** Short code accepted in addition to the token (pairing on a phone). */
+	pairingCode?: string | null
 	noWatch: boolean
 	noTerms: boolean
 	version: string
@@ -207,13 +209,23 @@ async function handleApi(
 
 	// --- auth check for everything else under /api ---
 	if (opts.authToken) {
-		const q = url.searchParams.get('token')
+		const q = url.searchParams.get('token') ?? url.searchParams.get('code')
 		const h =
 			req.headers['authorization']?.replace(/^Bearer\s+/i, '') ??
 			(req.headers['x-auth-token'] as string | undefined)
-		if (q !== opts.authToken && h !== opts.authToken) {
-			return sendJson(res, 401, {error: 'unauthorized: bad or missing token'})
+		if (!isAuthorized(opts, q, h)) {
+			return sendJson(res, 401, {
+				error: 'unauthorized: bad or missing token',
+				// tells the UI to show the pairing-code prompt
+				pairing: Boolean(opts.pairingCode),
+			})
 		}
+	}
+
+	if (url.pathname === '/api/auth/check' && method === 'GET') {
+		// Sits after the auth gate on purpose: reaching this handler means the
+		// presented token/pairing code was accepted. Used by the pairing screen.
+		return sendJson(res, 200, {ok: true})
 	}
 
 	if (url.pathname === '/api/files' && method === 'GET') {
@@ -756,12 +768,36 @@ async function serveStatic(
 	}
 }
 
-function checkWsToken(req: IncomingMessage, token: string): boolean {
+/**
+ * Accept either the full auth token or the short pairing code.
+ * `presented` values may be undefined (no query/header at all).
+ */
+function isAuthorized(
+	opts: ServeOptions,
+	queryValue: string | null | undefined,
+	headerValue: string | null | undefined,
+): boolean {
+	if (!opts.authToken) return true
+	const accepted = [opts.authToken]
+	if (opts.pairingCode) accepted.push(opts.pairingCode)
+	for (const v of [queryValue, headerValue]) {
+		if (v && accepted.includes(v)) return true
+	}
+	return false
+}
+
+function checkWsToken(req: IncomingMessage, opts: ServeOptions): boolean {
 	try {
 		const u = new URL(req.url ?? '/', 'http://x')
-		const q = u.searchParams.get('token')
+		const q = u.searchParams.get('token') ?? u.searchParams.get('code')
 		const proto = (req.headers['sec-websocket-protocol'] ?? '') as string
-		return q === token || proto.includes(token)
+		// The protocol header carries the token because browsers cannot set
+		// headers on WebSockets; a bare pairing code may be passed the same way.
+		const header =
+			opts.pairingCode && proto.includes(opts.pairingCode)
+				? opts.pairingCode
+				: undefined
+		return isAuthorized(opts, q, header)
 	} catch {
 		return false
 	}
@@ -817,7 +853,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 	const dapWss = new WebSocketServer({noServer: true})
 	const clients = new Set<WebSocket>()
 	wss.on('connection', (ws, req) => {
-		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+		if (opts.authToken && !checkWsToken(req, opts)) {
 			ws.close(4401, 'unauthorized')
 			return
 		}
@@ -832,7 +868,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 			ws.close(4403, 'terminal disabled')
 			return
 		}
-		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+		if (opts.authToken && !checkWsToken(req, opts)) {
 			ws.close(4401, 'unauthorized')
 			return
 		}
@@ -851,7 +887,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 
 	// WebSocket for language servers
 	lspWss.on('connection', (ws, req) => {
-		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+		if (opts.authToken && !checkWsToken(req, opts)) {
 			ws.close(4401, 'unauthorized')
 			return
 		}
@@ -868,7 +904,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 
 	// WebSocket for debug sessions (single active session, v1)
 	dapWss.on('connection', (ws, req) => {
-		if (opts.authToken && !checkWsToken(req, opts.authToken)) {
+		if (opts.authToken && !checkWsToken(req, opts)) {
 			ws.close(4401, 'unauthorized')
 			return
 		}
@@ -948,11 +984,19 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 				(opts.authToken ? `?token=${opts.authToken}` : ''),
 		)
 	}
+	if (opts.pairingCode) {
+		console.log(
+			`  Pairing code: ${opts.pairingCode}  (open the editor and type it when asked)`,
+		)
+	}
 	if (opts.authToken)
 		console.log(
 			'  Auth token enabled. Use ?token=... or --no-auth on trusted networks.',
 		)
-	else console.log('  No auth (--no-auth). Only use on trusted networks.')
+	else
+		console.log(
+			'  No auth (--no-auth or "auth": false). Only use on trusted networks.',
+		)
 	console.log(`  Watcher: ${watcher ? 'on' : 'off'}`)
 	console.log(
 		`  Terminal: ${terms ? `on${terms.ptyAvailable ? ' (pty via script)' : ' (pipes, no pty)'}` : 'off (--no-terms)'}\n`,

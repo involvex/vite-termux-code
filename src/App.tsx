@@ -8,12 +8,13 @@ import ExtensionsPanel from './components/ExtensionsPanel'
 import FileTree from './components/FileTree'
 import GitPanel from './components/GitPanel'
 import MarketplacePanel from './components/MarketplacePanel'
+import PairingPrompt from './components/PairingPrompt'
 import PaneFailure from './components/PaneFailure'
 import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
 import TasksPanel from './components/TasksPanel'
-import {api, wsUrl} from './lib/api'
+import {api, onUnauthorized, wsUrl} from './lib/api'
 import {dapClient} from './lib/dap'
 import {
 	notifyActiveTabChanged,
@@ -43,6 +44,13 @@ export default function App() {
 		settings,
 	} = useAppStore()
 	const [termMounted, setTermMounted] = useState(terminalOpen)
+	const [unauthorized, setUnauthorized] = useState(false)
+
+	// A 401 from any API call flips the whole UI into pairing mode.
+	useEffect(() => {
+		onUnauthorized(() => setUnauthorized(true))
+		return () => onUnauthorized(null)
+	}, [])
 
 	useEffect(() => {
 		if (terminalOpen) setTermMounted(true)
@@ -250,6 +258,23 @@ export default function App() {
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
 	}, [setTerminalOpen])
+
+	// Pairing gate: no IDE until the API answers without a 401.
+	if (unauthorized) {
+		return (
+			<div
+				className="ide"
+				data-theme={settings.theme}
+			>
+				<PairingPrompt
+					onPaired={() => {
+						setUnauthorized(false)
+						window.location.reload()
+					}}
+				/>
+			</div>
+		)
+	}
 
 	return (
 		<div
