@@ -202,6 +202,10 @@ function bpGutterExt(filePath: string, workspace?: number) {
 }
 
 // --- Stopped-location highlight (debugger current line)
+// NOTE: a StateField used as a dependency of `EditorView.decorations.compute`
+// must ALSO be part of the state config, otherwise `state.field(curField)`
+// inside the compute callback throws "Field is not present in this state"
+// on every editor mount.
 const setCurEffect = StateEffect.define<number | null>()
 const curField = StateField.define<number | null>({
 	create: () => null,
@@ -500,6 +504,8 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 						]),
 					)
 				}),
+				// must be in the state for the curLineDeco compute above
+				curField.init(() => null),
 				...(readOnly ? [] : [bpGutterExt(filePath, tabWorkspace)]),
 				curLineDeco,
 				settings.wordWrap ? EditorView.lineWrapping : [],
