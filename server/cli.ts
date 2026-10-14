@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
 	bashCompletionScript,
+	installBashCompletion,
 	isCompletionShell,
 	SUPPORTED_COMPLETION_SHELLS,
 } from './completion.ts'
@@ -32,7 +33,7 @@ Usage:
   td-code config edit             open the config in $VISUAL/$EDITOR
   td-code config validate         check the config without starting
   td-code config path             print the config file path
-  td-code completion bash         print a bash completion script
+  td-code completion bash [--install]  print or install a bash completion script
 
 Arguments:
   dir...                 directories to serve (default: . or config workspaces)
@@ -155,14 +156,40 @@ async function handleCompletionCommand(argv: string[]): Promise<void> {
 	const [shell, ...rest] = argv
 	if (shell === undefined || shell === '--help' || shell === '-h') {
 		console.log(
-			'Usage: td-code completion bash\nPrints a bash completion script to stdout.\nInstall it with:\n  td-code completion bash | sudo tee /etc/bash_completion.d/td-code >/dev/null',
+			'Usage: td-code completion bash [--install [--target <rcfile>]]\nPrints a bash completion script to stdout.\nWith --install, writes it to ~/.td-code/completion.bash and sources it\nfrom ~/.bashrc (or --target), creating the entry once.',
 		)
 		return
 	}
-	if (rest.length) {
-		console.error(`unexpected argument for completion: ${rest.join(' ')}\n`)
-		console.log('Usage: td-code completion bash')
-		process.exit(1)
+	let install = false
+	let target: string | null = null
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i] ?? ''
+		if (a === '--install') {
+			install = true
+		} else if (a === '--target') {
+			target = rest[i + 1] ?? ''
+			i++
+			if (!target) {
+				console.error(
+					'usage: td-code completion bash --install [--target <rcfile>]\n',
+				)
+				process.exit(1)
+			}
+		} else if (a.startsWith('--target=')) {
+			target = a.slice('--target='.length)
+			if (!target) {
+				console.error(
+					'usage: td-code completion bash --install [--target <rcfile>]\n',
+				)
+				process.exit(1)
+			}
+		} else {
+			console.error(`unknown flag for completion: ${a}\n`)
+			console.log(
+				'Usage: td-code completion bash [--install [--target <rcfile>]]',
+			)
+			process.exit(1)
+		}
 	}
 	if (!isCompletionShell(shell)) {
 		console.error(
@@ -170,7 +197,37 @@ async function handleCompletionCommand(argv: string[]): Promise<void> {
 		)
 		process.exit(1)
 	}
-	process.stdout.write(bashCompletionScript())
+	if (target && !install) {
+		console.error('--target needs --install\n')
+		console.log(
+			'Usage: td-code completion bash [--install [--target <rcfile>]]',
+		)
+		process.exit(1)
+	}
+	if (!install) {
+		process.stdout.write(bashCompletionScript())
+		return
+	}
+	try {
+		const rcFile = target
+			? path.resolve(process.cwd(), target.replace(/^~/, os.homedir()))
+			: undefined
+		const r = installBashCompletion(rcFile ? {rcFile} : {})
+		console.log(`wrote ${r.completionFile}`)
+		console.log(
+			r.rcUpdated
+				? `added source line to ${r.rcFile}`
+				: `already sourced from ${r.rcFile} (script refreshed)`,
+		)
+		console.log(
+			`restart your shell or run: source ${r.rcFile}\nIf you added an eval line by hand before, remove it — eval without quotes breaks the script.`,
+		)
+	} catch (e) {
+		console.error(
+			`install failed: ${e instanceof Error ? e.message : String(e)}`,
+		)
+		process.exit(1)
+	}
 }
 
 async function handleConfigCommand(argv: string[]): Promise<void> {
@@ -429,6 +486,60 @@ async function tryOpen(url: string) {
 	}
 }
 
+/** Levenshtein distance, for "did you mean" suggestions. */
+function editDistance(a: string, b: string): number {
+	const m = a.length
+	const n = b.length
+	if (m === 0) return n
+	if (n === 0) return m
+	let prev: number[] = Array.from({length: n + 1}, (_, j) => j)
+	for (let i = 1; i <= m; i++) {
+		const cur: number[] = [i]
+		for (let j = 1; j <= n; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1
+			cur[j] = Math.min(
+				(prev[j] ?? 0) + 1,
+				(cur[j - 1] ?? 0) + 1,
+				(prev[j - 1] ?? 0) + cost,
+			)
+		}
+		prev = cur
+	}
+	return prev[n] ?? 0
+}
+
+const KNOWN_SUBCOMMANDS = ['config', 'completion'] as const
+
+/**
+ * If the first CLI word looks like a mistyped subcommand (and is not an
+ * existing path), exit with a suggestion instead of "directory not found".
+ * Paths containing /, \, ~ or . are never treated as typos.
+ */
+function suggestSubcommand(first: string | undefined): void {
+	if (!first || first.startsWith('-')) return
+	if (/[/\\~.]/.test(first)) return
+	if (existsSync(first)) return
+	let best: string | null = null
+	let bestDist = Infinity
+	for (const c of KNOWN_SUBCOMMANDS) {
+		const d = editDistance(first.toLowerCase(), c)
+		if (d < bestDist) {
+			bestDist = d
+			best = c
+		}
+	}
+	const threshold = Math.max(
+		1,
+		Math.floor(Math.max(first.length, best?.length ?? 0) / 3),
+	)
+	if (best !== null && bestDist <= threshold) {
+		console.error(
+			`unknown command: ${first}\ndid you mean: td-code ${best} ?\n`,
+		)
+		process.exit(1)
+	}
+}
+
 async function main() {
 	const rawArgv = process.argv.slice(2)
 
@@ -439,9 +550,13 @@ async function main() {
 		return
 	}
 	if (rawArgv[0] === 'completion') {
-		handleCompletionCommand(rawArgv.slice(1))
+		await handleCompletionCommand(rawArgv.slice(1))
 		return
 	}
+	// A bare word that is neither a subcommand, a flag, nor an existing path
+	// is almost always a typo (`completions` for `completion`). Suggest instead
+	// of the confusing "directory not found".
+	suggestSubcommand(rawArgv[0])
 
 	const args = parseArgs(rawArgv)
 

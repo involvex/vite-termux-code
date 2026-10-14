@@ -47,6 +47,18 @@ flags, `config`/`completion` subcommands, `config init --force`, `--host`
 values, and directory names (with trailing `/` so completion continues
 inside).
 
+Easiest setup — `td-code completion bash --install` writes the script to
+`~/.td-code/completion.bash` and sources it from `~/.bashrc` (once; a second
+run is a no-op). `--target <file>` picks a different rc file. Then restart
+your shell or run `source ~/.bashrc`. If you previously added an
+`eval $(td-code …)` line by hand, remove it: without quotes the shell
+collapses the script's newlines and silently defines nothing — always
+`eval "$(…)"` or, better, `source`.
+
+A bare word that matches no subcommand, flag, or existing path gets a
+`did you mean` hint instead of `directory not found` (so `td-code
+completions bash` tells you the command is `completion`).
+
 | Flag             | Default                  | Notes                                                                |
 | ---------------- | ------------------------ | -------------------------------------------------------------------- |
 | `dir...`         | `.` or config workspaces | jailed roots, `..` escapes blocked; CLI dirs win over config         |
