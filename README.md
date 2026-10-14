@@ -34,12 +34,14 @@ If you serve `~/storage`, run `termux-setup-storage` first.
 ## CLI
 
 ```
-td-code [dir] [-p PORT] [--host ADDR] [--no-auth] [--auth-token TOKEN] [--no-watch] [--open]
+td-code [dir...] [options]
+td-code config init [--force]   write a starter ~/.td-code/config.json
+td-code config path             print the config file path
 ```
 
 | Flag | Default | Notes |
 | ---- | ------- | ----- |
-| `dir` | `.` | jailed root, `..` escapes blocked |
+| `dir...` | `.` or config workspaces | jailed roots, `..` escapes blocked; CLI dirs win over config |
 | `-p, --port` | `4444` | or `TD_CODE_PORT` env |
 | `--host` | `0.0.0.0` | use `127.0.0.1` to lock to device, or `TD_CODE_HOST` |
 | `--no-auth` | off | random token is printed unless disabled; `TD_CODE_TOKEN` overrides |
@@ -73,9 +75,17 @@ Optional, and everything in it is optional too. Precedence: **defaults < config 
   "watch": true,          // false = --no-watch
   "terms": true,          // false = --no-terms
   "open": false,          // launch a browser at startup
+
+  "workspaces": [         // multi-root folders served without CLI args
+    "~/projects/api",     // CLI dirs win over this list;
+    { "path": "~/projects/web", "name": "web" }  // TD_CODE_WORKSPACES wins over both
+  ],
   "version": 1
 }
 ```
+
+Generate the file with `td-code config init` (refuses to overwrite without
+`--force`); keys starting with `_` are comments and ignored by the parser.
 
 Unknown keys and wrong types are reported on startup and ignored (the file is never fatal), so a typo like `"authentification"` tells you instead of being silently dropped. A UTF-8 BOM (what Windows Notepad writes) is handled.
 

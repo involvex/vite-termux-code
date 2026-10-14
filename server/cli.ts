@@ -3,7 +3,14 @@ import {randomBytes} from 'node:crypto'
 import {existsSync, statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {generatePairingCode, loadUserConfig, userConfigPath} from './config.ts'
+import {
+	generatePairingCode,
+	initUserConfig,
+	loadUserConfig,
+	parseEnvWorkspaces,
+	resolveConfigWorkspaces,
+	userConfigPath,
+} from './config.ts'
 import {lanIps, startServer} from './server.ts'
 
 const VERSION = '0.1.0'
@@ -15,9 +22,11 @@ function help() {
 
 Usage:
   td-code [dir...] [options]
+  td-code config init [--force]   write a starter ~/.td-code/config.json
+  td-code config path             print the config file path
 
 Arguments:
-  dir...                 directories to serve (default: .)
+  dir...                 directories to serve (default: . or config workspaces)
 
 Options:
   -p, --port <n>         port to listen on (default: ${DEFAULT_PORT})
@@ -39,10 +48,13 @@ Examples:
   td-code . --host 127.0.0.1 --auth-token secret --open
   td-code . --pairing             # also accept a 6-digit pairing code
   td-code project1 project2       # serve multiple directories (multi-root workspace)
+  td-code config init             # write a commented starter config
 
 Config file (optional): ${userConfigPath()}
   { "port": 4444, "auth": false, "pairing": { "enabled": true } }
+  { "workspaces": ["~/projects/api", {"path": "~/projects/web", "name": "web"}] }
   Precedence: defaults < config file < CLI flags < TD_CODE_* env vars.
+  CLI dirs win over config workspaces; TD_CODE_WORKSPACES (OS-separated) wins over both.
 
 In another Termux session run e.g. opencode, then open its URL
 in the Browser tab (default quick-link http://localhost:4096).
@@ -126,8 +138,44 @@ function parseArgs(argv: string[]): Args {
 		console.error(`--pairing-code must be 4-10 digits, got: ${out.pairingCode}`)
 		process.exit(1)
 	}
-	if (out.dirs.length === 0) out.dirs = ['.']
 	return out
+}
+
+function handleConfigCommand(argv: string[]): void {
+	const [sub, ...rest] = argv
+	if (sub === 'path') {
+		console.log(userConfigPath())
+		return
+	}
+	if (sub === 'init') {
+		if (rest.includes('--help') || rest.includes('-h')) {
+			console.log('Usage: td-code config init [--force]')
+			return
+		}
+		const force = rest.includes('--force') || rest.includes('-f')
+		const unknownFlag = rest.find(
+			r => r.startsWith('-') && r !== '--force' && r !== '-f',
+		)
+		if (unknownFlag) {
+			console.error(`unknown flag for config init: ${unknownFlag}\n`)
+			console.log('Usage: td-code config init [--force]')
+			process.exit(1)
+		}
+		try {
+			const {path: file} = initUserConfig(userConfigPath(), {force})
+			console.log(`wrote starter config to ${file}`)
+			console.log('edit it, then run: td-code')
+		} catch (e) {
+			console.error(e instanceof Error ? e.message : String(e))
+			process.exit(1)
+		}
+		return
+	}
+	console.error(
+		sub ? `unknown config subcommand: ${sub}\n` : 'missing config subcommand\n',
+	)
+	console.log('Usage:\n  td-code config init [--force]\n  td-code config path')
+	process.exit(1)
 }
 
 async function tryOpen(url: string) {
@@ -161,7 +209,16 @@ async function tryOpen(url: string) {
 }
 
 async function main() {
-	const args = parseArgs(process.argv.slice(2))
+	const rawArgv = process.argv.slice(2)
+
+	// Subcommands run before normal startup (no server, no config load needed
+	// beyond the target path).
+	if (rawArgv[0] === 'config') {
+		handleConfigCommand(rawArgv.slice(1))
+		return
+	}
+
+	const args = parseArgs(rawArgv)
 
 	// Optional user config; a broken file is reported but never fatal.
 	const {config, path: configPath, error: configError} = loadUserConfig()
@@ -171,7 +228,33 @@ async function main() {
 		console.log(`[td-code] using config ${configPath}`)
 	}
 
-	const rootDirs = args.dirs.map(d =>
+	// Multi-root resolution: CLI dirs > TD_CODE_WORKSPACES > config > cwd.
+	// parseArgs no longer defaults dirs to ['.'] so we can tell explicit CLI
+	// input apart from "nothing given".
+	const envWorkspaces = parseEnvWorkspaces()
+	const configWorkspaces = config.workspaces
+		? resolveConfigWorkspaces(config.workspaces)
+		: []
+	let dirInputs: string[]
+	let dirSource: string
+	if (args.dirs.length > 0) {
+		dirInputs = args.dirs
+		dirSource = 'cli'
+	} else if (envWorkspaces.length > 0) {
+		dirInputs = envWorkspaces.map(w => w.path)
+		dirSource = 'TD_CODE_WORKSPACES'
+	} else if (configWorkspaces.length > 0) {
+		dirInputs = configWorkspaces.map(w => w.path)
+		dirSource = `config ${configPath}`
+	} else {
+		dirInputs = ['.']
+		dirSource = 'cwd'
+	}
+	if (dirSource !== 'cli' && dirInputs.length > 1) {
+		console.log(`[td-code] using workspaces from ${dirSource}`)
+	}
+
+	const rootDirs = dirInputs.map(d =>
 		path.resolve(process.cwd(), d.replace(/^~/, os.homedir())),
 	)
 

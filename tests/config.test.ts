@@ -1,7 +1,14 @@
 import {describe, expect, test} from 'bun:test'
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {
 	generatePairingCode,
+	initUserConfig,
 	parseConfig,
+	parseEnvWorkspaces,
+	resolveConfigWorkspaces,
+	STARTER_CONFIG_TEXT,
 	userConfigPath,
 } from '../server/config.ts'
 
@@ -22,6 +29,7 @@ describe('parseConfig', () => {
 					watch: false,
 					terms: false,
 					open: true,
+					workspaces: ['~/projects/api', {path: '~/projects/web', name: 'web'}],
 					version: 1,
 				}),
 			),
@@ -34,8 +42,18 @@ describe('parseConfig', () => {
 			watch: false,
 			terms: false,
 			open: true,
+			workspaces: [
+				{path: '~/projects/api'},
+				{path: '~/projects/web', name: 'web'},
+			],
 			version: 1,
 		})
+	})
+
+	test('ignores _comment / $comment keys', () => {
+		expect(
+			parseConfig('{"_comment": "hi", "$note": 1, "auth": false}'),
+		).toEqual({auth: false})
 	})
 
 	test('rejects invalid JSON with the source path', () => {
@@ -82,6 +100,77 @@ describe('parseConfig', () => {
 		expect(parseConfig('{"pairing": {"code": "482913"}}').pairing?.code).toBe(
 			'482913',
 		)
+	})
+
+	test('validates workspaces entries', () => {
+		expect(
+			parseConfig('{"workspaces": ["a", {"path": "b", "name": "B"}]}')
+				.workspaces,
+		).toEqual([{path: 'a'}, {path: 'b', name: 'B'}])
+		expect(() => parseConfig('{"workspaces": "nope"}', 'cfg')).toThrow(
+			/must be an array/,
+		)
+		expect(() => parseConfig('{"workspaces": []}', 'cfg')).toThrow(
+			/must not be empty/,
+		)
+		expect(() => parseConfig('{"workspaces": [42]}', 'cfg')).toThrow(
+			/must be a path string/,
+		)
+		expect(() => parseConfig('{"workspaces": ["", "x"]}', 'cfg')).toThrow(
+			/non-empty string/,
+		)
+		expect(() => parseConfig('{"workspaces": ["a", "A"]}', 'cfg')).toThrow(
+			/duplicates/,
+		)
+		expect(() =>
+			parseConfig('{"workspaces": [{"path": "a", "bogus": 1}]}', 'cfg'),
+		).toThrow(/unknown key\(s\): bogus/)
+	})
+})
+
+describe('resolveConfigWorkspaces', () => {
+	test('expands ~ and resolves relative paths', () => {
+		const out = resolveConfigWorkspaces(
+			[{path: 'rel/dir'}, {path: '~/x', name: 'home'}],
+			'/base',
+		)
+		expect(out[0]?.path.replace(/\\/g, '/')).toMatch(/\/base\/rel\/dir$/)
+		expect(out[1]?.name).toBe('home')
+	})
+})
+
+describe('parseEnvWorkspaces', () => {
+	test('splits on the OS path delimiter', () => {
+		const sep = process.platform === 'win32' ? ';' : ':'
+		expect(parseEnvWorkspaces(`a${sep} b ${sep}`).map(w => w.path)).toEqual([
+			'a',
+			'b',
+		])
+		expect(parseEnvWorkspaces('')).toEqual([])
+		expect(parseEnvWorkspaces(undefined)).toEqual([])
+	})
+})
+
+describe('initUserConfig', () => {
+	test('starter template parses and round-trips', () => {
+		expect(() => parseConfig(STARTER_CONFIG_TEXT, '<starter>')).not.toThrow()
+		const parsed = parseConfig(STARTER_CONFIG_TEXT)
+		expect(parsed.port).toBe(4444)
+		expect(parsed.workspaces?.length).toBe(2)
+	})
+
+	test('writes the file, refuses to overwrite without --force', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'td-code-cfg-'))
+		try {
+			const file = join(dir, '.td-code', 'config.json')
+			const first = initUserConfig(file, {})
+			expect(first.path).toBe(file)
+			expect(readFileSync(file, 'utf8')).toBe(STARTER_CONFIG_TEXT)
+			expect(() => initUserConfig(file, {})).toThrow(/already exists/)
+			expect(() => initUserConfig(file, {force: true})).not.toThrow()
+		} finally {
+			rmSync(dir, {recursive: true, force: true})
+		}
 	})
 })
 
