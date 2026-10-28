@@ -154,7 +154,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 		headers: {
 			'Content-Type': 'application/json',
 			...(t ? {'x-auth-token': t} : {}),
-			...(init?.headers ?? {}),
+			...init?.headers,
 		},
 	})
 	if (res.status === 401) {

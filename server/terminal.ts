@@ -234,7 +234,7 @@ export class TermManager {
 	}
 
 	killAll() {
-		for (const id of [...this.sessions.keys()]) this.remove(id)
+		for (const id of this.sessions.keys()) this.remove(id)
 	}
 
 	/** Attach a /term websocket: replay scrollback, then stream live output. */
