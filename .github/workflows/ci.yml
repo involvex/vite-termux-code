@@ -31,7 +31,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Type-check (src + server + scripts + tests)
-        run: bun run check
+        run: bun check
 
       - name: Unit tests
         run: bun run test
