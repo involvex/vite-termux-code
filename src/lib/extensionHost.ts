@@ -262,8 +262,8 @@ export async function installExtension(
 	}
 
 	// Merge td-code field into manifest
-	const tdCodeField = manifest['td-code'] as Record<string, any>
-	Object.assign(manifest, tdCodeField)
+	const tdCodeField = manifest['td-code']
+	if (tdCodeField) Object.assign(manifest, tdCodeField)
 
 	// Determine extension path
 	let extensionPath: string
@@ -339,7 +339,7 @@ export function getExtension(extensionId: string): Extension | undefined {
  */
 export function getExtensionConfiguration(
 	extensionId: string,
-): ExtensionManifest['contributes']['configuration'] | undefined {
+): NonNullable<ExtensionManifest['contributes']>['configuration'] | undefined {
 	const ext = extensions.get(extensionId)
 	if (!ext) return undefined
 	return ext.manifest.contributes?.configuration
@@ -348,7 +348,10 @@ export function getExtensionConfiguration(
 /**
  * Get extension configuration value
  */
-export function getExtensionConfigValue(extensionId: string, key: string): any {
+export function getExtensionConfigValue(
+	extensionId: string,
+	key: string,
+): undefined | string | boolean | number | object {
 	const ext = extensions.get(extensionId)
 	if (!ext) return undefined
 	const config = ext.manifest.contributes?.configuration?.properties?.[key]

@@ -20,6 +20,8 @@ export interface ExtensionManifest {
 	license?: string
 	icon?: string
 	keywords?: string[]
+	/** npm package.json field carrying td-code-specific manifest overrides */
+	'td-code'?: Partial<Omit<ExtensionManifest, 'td-code'>>
 }
 
 export type ExtensionCategory =

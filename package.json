@@ -8,19 +8,18 @@
 		"td-code": "./dist/cli.js"
 	},
 	"scripts": {
-		"build": "tsc -b && vite build && bun build ./server/cli.ts --outfile ./dist/cli.js --target bun",
-		"build:server": "bun build ./server/cli.ts --outfile ./dist/cli.js --target bun",
+		"prebuild": "bun run format && bun check && bun lint:fix",
+		"build": "tsc -b && vite build && bun build ./server/cli.ts --outfile ./dist/cli.js --target bun && bun run build:ui",
 		"build:ui": "vite build",
-		"check": "tsc -b --noEmit",
-		"dev": "vite --port 4444 --host 0.0.0.0",
-		"dev:server": "bun --watch ./server/cli.ts . --port 4445 --host 127.0.0.1 --no-auth",
+		"dev": "concurrently \"vite --port 4444 --host 0.0.0.0\" \"bun --watch ./server/cli.ts . --port 4445 --host 127.0.0.1 --no-auth\"",
 		"format": "prettier . --write",
 		"lint": "oxlint",
 		"lint:fix": "oxlint --fix",
-		"preview": "vite preview",
+		"preview": "concurrently \"vite preview\" \"bun --watch ./server/cli.ts . --port 4445 --host 127.0.0.1 --no-auth\"",
 		"serve": "bun ./dist/cli.js",
 		"smoke": "bun run ./scripts/smoke.ts",
-		"test": "bun test"
+		"test": "bun test",
+		"typecheck": "tsc -b --noEmit"
 	},
 	"prettier": "@involvex/prettier-config",
 	"dependencies": {
@@ -39,6 +38,7 @@
 		"@codemirror/state": "^6.5.2",
 		"@codemirror/theme-one-dark": "^6.1.3",
 		"@codemirror/view": "^6.38.1",
+		"@novnc/novnc": "^1.7.0",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/addon-web-links": "^0.12.0",
 		"@xterm/xterm": "^6.0.0",
@@ -57,6 +57,7 @@
 		"@types/react-dom": "^19.2.7",
 		"@types/ws": "^8.18.1",
 		"@vitejs/plugin-react": "^6.1.1",
+		"concurrently": "10.0.6",
 		"oxlint": "^1.81.0",
 		"prettier": "^3.9.10",
 		"typescript": "~5.9.3",

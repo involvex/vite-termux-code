@@ -14,6 +14,8 @@ import Reloadable from './components/Reloadable'
 import SearchPanel from './components/SearchPanel'
 import StatusBar from './components/StatusBar'
 import TasksPanel from './components/TasksPanel'
+import VNCViewer from './components/VNC-Viewer'
+import VncPanel from './components/VncPanel'
 import {api, onUnauthorized, wsUrl} from './lib/api'
 import {dapClient} from './lib/dap'
 import {
@@ -38,12 +40,15 @@ export default function App() {
 		setSidebarOpen,
 		terminalOpen,
 		setTerminalOpen,
+		vncOpen,
+		setVncOpen,
 		setGit,
 		tabs,
 		updateTab,
 		settings,
 	} = useAppStore()
 	const [termMounted, setTermMounted] = useState(terminalOpen)
+	const [vncMounted, setVncMounted] = useState(vncOpen)
 	const [unauthorized, setUnauthorized] = useState(false)
 
 	// A 401 from any API call flips the whole UI into pairing mode.
@@ -55,6 +60,10 @@ export default function App() {
 	useEffect(() => {
 		if (terminalOpen) setTermMounted(true)
 	}, [terminalOpen])
+
+	useEffect(() => {
+		if (vncOpen) setVncMounted(true)
+	}, [vncOpen])
 
 	useEffect(() => {
 		api
@@ -370,6 +379,21 @@ export default function App() {
 					⌨
 				</button>
 				<button
+					className={`act ${panel === 'vnc' || vncOpen ? 'active' : ''}`}
+					title="VNC remote desktop"
+					onClick={() => {
+						if (panel === 'vnc' && sidebarOpen) {
+							setVncOpen(!vncOpen)
+						} else {
+							setPanel('vnc')
+							setSidebarOpen(true)
+							setVncOpen(true)
+						}
+					}}
+				>
+					🖥
+				</button>
+				<button
 					className="act"
 					title="Command Palette (Ctrl+Shift+P)"
 					onClick={() => useAppStore.getState().setPaletteOpen(true)}
@@ -417,6 +441,8 @@ export default function App() {
 						<ExtensionsPanel />
 					) : panel === 'marketplace' ? (
 						<MarketplacePanel />
+					) : panel === 'vnc' ? (
+						<VncPanel />
 					) : (
 						<GitPanel />
 					)}
@@ -447,6 +473,7 @@ export default function App() {
 						props={{visible: terminalOpen}}
 					/>
 				)}
+				{vncMounted && <VNCViewer visible={vncOpen} />}
 			</main>
 
 			<StatusBar />

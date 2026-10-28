@@ -238,7 +238,11 @@ export function createExtensionContext(
 		},
 
 		onDidChangeActiveTab(listener) {
-			return addSubscription(onDidChangeActiveTabEmitter.on(listener))
+			return addSubscription(
+				onDidChangeActiveTabEmitter.on(
+					listener as (arg: OpenTab | null) => void,
+				),
+			)
 		},
 
 		onDidChangeActiveWorkspace(listener) {

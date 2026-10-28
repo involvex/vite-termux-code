@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
+﻿import {useCallback, useEffect, useRef, useState} from 'react'
 import {api, type FileItem, type Workspace} from '../lib/api'
 import {notifyFileCreated, notifyFileDeleted} from '../lib/extensionApi'
 import {fileBadge} from '../lib/icons'
@@ -615,9 +615,11 @@ export default function FileTree() {
 			{loading && <div className="muted">loading…</div>}
 			{error && <div className="error">{error}</div>}
 			<div className="tree-wrap">
-				{workspaces.map((ws, i) =>
-					renderWorkspace(ws, i, i === activeWorkspace),
-				)}
+				{workspaces.map((ws, i) => (
+					<div key={'workspace-' + ws.rootDir}>
+						{renderWorkspace(ws, i, i === activeWorkspace)}
+					</div>
+				))}
 			</div>
 			{contextMenu && (
 				<div

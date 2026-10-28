@@ -189,8 +189,8 @@ async function closeBrowser() {
 // -------------------------------------------------------------------- cdp ---
 
 interface Cdp {
-	send: (method: string, params?: unknown) => Promise<any>
-	evaluate: <T = any>(expression: string) => Promise<T>
+	send: (method: string, params?: unknown) => Promise<unknown>
+	evaluate: <T = unknown>(expression: string) => Promise<T>
 	exceptions: string[]
 	consoleErrors: string[]
 	close: () => void
@@ -198,7 +198,7 @@ interface Cdp {
 
 async function connect(wsUrl: string): Promise<Cdp> {
 	const ws = new WebSocket(wsUrl)
-	const pending = new Map<number, (v: any) => void>()
+	const pending = new Map<number, (v: unknown) => void>()
 	const exceptions: string[] = []
 	const consoleErrors: string[] = []
 	let id = 0
@@ -222,7 +222,12 @@ async function connect(wsUrl: string): Promise<Cdp> {
 		) {
 			consoleErrors.push(
 				(msg.params.args ?? [])
-					.map((a: any) => a.value ?? a.description ?? '?')
+					.map(
+						(a: unknown) =>
+							(a as {value: string; description: string}).value ??
+							(a as {value: string; description: string}).description ??
+							'?',
+					)
 					.join(' '),
 			)
 		}
@@ -236,7 +241,7 @@ async function connect(wsUrl: string): Promise<Cdp> {
 	}
 
 	const send = (method: string, params: unknown = {}) =>
-		new Promise<any>(resolve => {
+		new Promise<unknown>(resolve => {
 			const myId = ++id
 			pending.set(myId, (m: any) => resolve(m.result ?? m.error))
 			ws.send(JSON.stringify({id: myId, method, params}))
@@ -256,12 +261,17 @@ async function connect(wsUrl: string): Promise<Cdp> {
 			returnByValue: true,
 			awaitPromise: true,
 		})
-		if (r.exceptionDetails) {
+		if (
+			r &&
+			typeof r === 'object' &&
+			'exceptionDetails' in r &&
+			r.exceptionDetails
+		) {
 			throw new Error(
-				`page evaluate failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`,
+				`page evaluate failed: ${(r as {exceptionDetails: {exception: {description: string}; text: string}}).exceptionDetails.exception?.description ?? (r as {exceptionDetails: {text: string}}).exceptionDetails.text}`,
 			)
 		}
-		return r.result.value as T
+		return (r as {result: {value: unknown}}).result.value as unknown as T
 	}
 
 	return {send, evaluate, exceptions, consoleErrors, close: () => ws.close()}
@@ -297,7 +307,8 @@ async function main() {
 			process.exit(1)
 		}
 		const port = await freePort()
-		url = `http://127.0.0.1:${port}/`
+		const baseUrl = `http://127.0.0.1:${port}/`
+		url = baseUrl
 		serverProc = spawn(
 			'bun',
 			[
@@ -314,7 +325,7 @@ async function main() {
 		await waitFor(
 			async () => {
 				try {
-					const r = await fetch(new URL('/api/health', url))
+					const r = await fetch(new URL('/api/health', baseUrl))
 					return r.ok
 				} catch {
 					return false
@@ -330,9 +341,13 @@ async function main() {
 
 	const devtools = await launchBrowser(bin)
 	const targets = await (await fetch(`${devtools}/json/list`)).json()
-	const page = (targets as any[]).find(t => t.type === 'page')
+	const page = (targets as unknown as {type: string}[]).find(
+		t => t.type === 'page',
+	)
 	if (!page) throw new Error('no page target in headless browser')
-	const cdp = await connect(page.webSocketDebuggerUrl)
+	const cdp = await connect(
+		(page as unknown as {webSocketDebuggerUrl: string}).webSocketDebuggerUrl,
+	)
 
 	await cdp.send('Page.navigate', {url})
 
@@ -598,7 +613,8 @@ if (failed.length) {
 }
 
 try {
-	serverProc?.kill()
+	const proc = serverProc as ChildProcess | null
+	proc?.kill()
 } catch {
 	/* ignore */
 }

@@ -191,6 +191,14 @@ export function allCommands(): Command[] {
 			run: () => s.setPanel('browser'),
 		},
 		{
+			id: 'view.vnc',
+			title: 'View: Show VNC',
+			run: () => {
+				showPanel('vnc')
+				s.setVncOpen(true)
+			},
+		},
+		{
 			id: 'view.toggleSidebar',
 			title: 'View: Toggle Sidebar',
 			run: () => s.setSidebarOpen(!s.sidebarOpen),
@@ -200,6 +208,11 @@ export function allCommands(): Command[] {
 			title: 'View: Toggle Terminal',
 			hint: 'Ctrl+`',
 			run: () => s.setTerminalOpen(!s.terminalOpen),
+		},
+		{
+			id: 'view.toggleVnc',
+			title: 'View: Toggle VNC',
+			run: () => s.setVncOpen(!s.vncOpen),
 		},
 		{
 			id: 'file.new',
@@ -276,6 +289,23 @@ export function allCommands(): Command[] {
 			run: () => {
 				s.resetSettings()
 				s.setStatus('settings reset')
+			},
+		},
+		{
+			id: 'vnc.viewer',
+			title: 'VNC: Open Viewer',
+			run: () => {
+				showPanel('vnc')
+				s.setVncOpen(true)
+				s.setStatus('VNC drawer open')
+			},
+		},
+		{
+			id: 'vnc.close',
+			title: 'VNC: Close Viewer',
+			run: () => {
+				s.setVncOpen(false)
+				s.setStatus('VNC drawer closed')
 			},
 		},
 	]

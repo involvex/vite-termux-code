@@ -8,6 +8,21 @@ export default function CommandPalette() {
 	const [index, setIndex] = useState(0)
 	const inputRef = useRef<HTMLInputElement>(null)
 	const listRef = useRef<HTMLDivElement>(null)
+	const prevOpenRef = useRef(paletteOpen)
+	const prevQueryRef = useRef(query)
+
+	// Reset state when the palette opens (adjust during render, not in an effect).
+	if (paletteOpen && !prevOpenRef.current) {
+		setQuery('')
+		setIndex(0)
+	}
+	prevOpenRef.current = paletteOpen
+
+	// Reset selection when the query changes.
+	if (prevQueryRef.current !== query) {
+		setIndex(0)
+		prevQueryRef.current = query
+	}
 
 	const commands = useMemo(
 		() => (paletteOpen ? allCommands() : []),
@@ -29,15 +44,11 @@ export default function CommandPalette() {
 
 	useEffect(() => {
 		if (paletteOpen) {
-			setQuery('')
-			setIndex(0)
 			// focus after mount
 			const t = window.setTimeout(() => inputRef.current?.focus(), 20)
 			return () => window.clearTimeout(t)
 		}
 	}, [paletteOpen])
-
-	useEffect(() => setIndex(0), [query])
 
 	useEffect(() => {
 		listRef.current

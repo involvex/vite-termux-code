@@ -27,6 +27,7 @@ export type Panel =
 	| 'debug'
 	| 'extensions'
 	| 'marketplace'
+	| 'vnc'
 
 export interface DebugStopped {
 	threadId: number
@@ -59,6 +60,9 @@ interface AppState {
 	showHidden: boolean
 	sidebarOpen: boolean
 	terminalOpen: boolean
+	vncOpen: boolean
+	vncUrl: string
+	vncPassword: string
 	paletteOpen: boolean
 	panel: Panel
 	tabs: OpenTab[]
@@ -90,6 +94,9 @@ interface AppState {
 	setShowHidden: (v: boolean) => void
 	setSidebarOpen: (v: boolean) => void
 	setTerminalOpen: (v: boolean) => void
+	setVncOpen: (v: boolean) => void
+	setVncUrl: (url: string) => void
+	setVncPassword: (password: string) => void
 	setPaletteOpen: (v: boolean) => void
 	setPanel: (p: Panel) => void
 	openTab: (t: OpenTab) => void
@@ -211,6 +218,27 @@ function loadWorkspaces(): Workspace[] {
 	return []
 }
 
+const VNC_URL_KEY = 'td-code-vnc-url-v1'
+const DEFAULT_VNC_URL = 'ws://127.0.0.1:5901'
+
+function loadVncUrl(): string {
+	try {
+		const raw = localStorage.getItem(VNC_URL_KEY)
+		if (raw && typeof raw === 'string' && raw.trim()) return raw.trim()
+	} catch {
+		/* ignore */
+	}
+	return DEFAULT_VNC_URL
+}
+
+function saveVncUrl(url: string): void {
+	try {
+		localStorage.setItem(VNC_URL_KEY, url)
+	} catch {
+		/* ignore */
+	}
+}
+
 function saveWorkspaces(workspaces: Workspace[]) {
 	try {
 		localStorage.setItem('td-code-workspaces-v1', JSON.stringify(workspaces))
@@ -235,6 +263,9 @@ export const useAppStore = create<AppState>()((set, get) => {
 		showHidden: false,
 		sidebarOpen: true,
 		terminalOpen: false,
+		vncOpen: false,
+		vncUrl: loadVncUrl(),
+		vncPassword: '',
 		paletteOpen: false,
 		panel: 'explorer',
 		tabs: [],
@@ -285,6 +316,12 @@ export const useAppStore = create<AppState>()((set, get) => {
 		setShowHidden: showHidden => set({showHidden}),
 		setSidebarOpen: sidebarOpen => set({sidebarOpen}),
 		setTerminalOpen: terminalOpen => set({terminalOpen}),
+		setVncOpen: vncOpen => set({vncOpen}),
+		setVncUrl: vncUrl => {
+			saveVncUrl(vncUrl)
+			set({vncUrl})
+		},
+		setVncPassword: vncPassword => set({vncPassword}),
 		setPaletteOpen: paletteOpen => set({paletteOpen}),
 		setPanel: panel => set({panel}),
 		openTab: t =>

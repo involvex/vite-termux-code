@@ -64,6 +64,7 @@ td-code . --host 127.0.0.1 --auth-token secret --open
 ```
 
 **Environment variable overrides** (useful in Termux):
+
 - `TD_CODE_PORT` — port (default 4444)
 - `TD_CODE_HOST` — host (default 0.0.0.0)
 - `TD_CODE_TOKEN` — fixed auth token
@@ -88,20 +89,20 @@ opencode serve --port 4096
 
 ## 3. Technologies & Stack
 
-| Layer | Technology | Version | Notes |
-|-------|------------|---------|-------|
-| **Runtime** | Bun | ≥1.3 | Primary; Node 20+ also supported |
-| **Language** | TypeScript | ~5.9 | Strict mode, `bun check` for type-checking |
-| **Build** | Vite | ^8.3 | React plugin, proxy for `/api`, `/ws`, `/term` |
-| **Frontend** | React | ^19.2 | Functional components, hooks, Zustand state |
-| **Editor** | CodeMirror 6 | ^6.0 | Modular: `@codemirror/*` packages |
-| **Terminal** | xterm.js | ^6.0 | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links` |
-| **State** | Zustand | ^5.0 | Single store (`useAppStore`) |
-| **File Watch** | chokidar | ^4.0 | Debounced WebSocket broadcasts |
-| **Lint** | oxlint | ^1.81 | Rust-based, ~100x faster than ESLint |
-| **Format** | Prettier | ^3.9 | `@involvex/prettier-config` |
-| **WS** | ws | ^8.18 | WebSocket server (file watcher + terminal) |
-| **Git** | Native `git` | System | Spawned via `child_process`, zero deps |
+| Layer          | Technology   | Version | Notes                                                        |
+| -------------- | ------------ | ------- | ------------------------------------------------------------ |
+| **Runtime**    | Bun          | ≥1.3    | Primary; Node 20+ also supported                             |
+| **Language**   | TypeScript   | ~5.9    | Strict mode, `bun check` for type-checking                   |
+| **Build**      | Vite         | ^8.3    | React plugin, proxy for `/api`, `/ws`, `/term`               |
+| **Frontend**   | React        | ^19.2   | Functional components, hooks, Zustand state                  |
+| **Editor**     | CodeMirror 6 | ^6.0    | Modular: `@codemirror/*` packages                            |
+| **Terminal**   | xterm.js     | ^6.0    | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links` |
+| **State**      | Zustand      | ^5.0    | Single store (`useAppStore`)                                 |
+| **File Watch** | chokidar     | ^4.0    | Debounced WebSocket broadcasts                               |
+| **Lint**       | oxlint       | ^1.81   | Rust-based, ~100x faster than ESLint                         |
+| **Format**     | Prettier     | ^3.9    | `@involvex/prettier-config`                                  |
+| **WS**         | ws           | ^8.18   | WebSocket server (file watcher + terminal)                   |
+| **Git**        | Native `git` | System  | Spawned via `child_process`, zero deps                       |
 
 ---
 
@@ -269,31 +270,31 @@ bun run build      # production build
 
 ## 7. Common Pitfalls & Gotchas
 
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| `bun check` passes but `tsc` fails | Different TS versions | Use `bun check` only; `tsc` only for `.d.ts` emit |
-| WebSocket 401 on `/ws` or `/term` | Token mismatch | Ensure `authQuery()` / `wsUrl()` includes token from URL/sessionStorage |
-| Terminal shows "pty not available" | `script(1)` missing | `pkg install util-linux` (Termux) |
-| Git tab shows "not a git repository" | No `.git` in served root | Expected behavior — serve a git repo root |
-| File watcher not firing | `chokidar` ignored paths | Check `ignored` array in `server.ts` (node_modules, .git, dist) |
-| Large file opens read-only | >2MB limit | By design — increase `MAX_FILE_BYTES` in `server.ts` if needed |
-| Search returns no results | Query < 2 chars or >512KB files | Min 2 chars, files >512KB skipped |
+| Issue                                | Cause                           | Fix                                                                     |
+| ------------------------------------ | ------------------------------- | ----------------------------------------------------------------------- |
+| `bun check` passes but `tsc` fails   | Different TS versions           | Use `bun check` only; `tsc` only for `.d.ts` emit                       |
+| WebSocket 401 on `/ws` or `/term`    | Token mismatch                  | Ensure `authQuery()` / `wsUrl()` includes token from URL/sessionStorage |
+| Terminal shows "pty not available"   | `script(1)` missing             | `pkg install util-linux` (Termux)                                       |
+| Git tab shows "not a git repository" | No `.git` in served root        | Expected behavior — serve a git repo root                               |
+| File watcher not firing              | `chokidar` ignored paths        | Check `ignored` array in `server.ts` (node_modules, .git, dist)         |
+| Large file opens read-only           | >2MB limit                      | By design — increase `MAX_FILE_BYTES` in `server.ts` if needed          |
+| Search returns no results            | Query < 2 chars or >512KB files | Min 2 chars, files >512KB skipped                                       |
 
 ---
 
 ## 8. Key Files Reference
 
-| File | Purpose |
-|------|---------|
-| `src/store/useAppStore.ts` | Global Zustand state + actions |
-| `src/lib/api.ts` | Typed API client, WS URLs, auth |
-| `src/App.tsx` | Root layout, effects (WS, keyboard, init) |
-| `server/server.ts` | HTTP server, API routes, WS upgrade routing |
-| `server/terminal.ts` | TermManager, PTY/pipes, session lifecycle |
-| `server/git.ts` | Git CLI wrappers (status, log, diff, stage, commit, etc.) |
-| `server/paths.ts` | `resolveSafe()` (path jail), `findOnPath()` |
-| `vite.config.ts` | Vite config, dev proxy to API server |
-| `package.json` | Scripts, deps, bin entry (`td-code`) |
+| File                       | Purpose                                                   |
+| -------------------------- | --------------------------------------------------------- |
+| `src/store/useAppStore.ts` | Global Zustand state + actions                            |
+| `src/lib/api.ts`           | Typed API client, WS URLs, auth                           |
+| `src/App.tsx`              | Root layout, effects (WS, keyboard, init)                 |
+| `server/server.ts`         | HTTP server, API routes, WS upgrade routing               |
+| `server/terminal.ts`       | TermManager, PTY/pipes, session lifecycle                 |
+| `server/git.ts`            | Git CLI wrappers (status, log, diff, stage, commit, etc.) |
+| `server/paths.ts`          | `resolveSafe()` (path jail), `findOnPath()`               |
+| `vite.config.ts`           | Vite config, dev proxy to API server                      |
+| `package.json`             | Scripts, deps, bin entry (`td-code`)                      |
 
 ---
 
@@ -387,4 +388,4 @@ MIT — see LICENSE file.
 
 ---
 
-*Generated for agent context. Keep this file updated as the project evolves.*
+_Generated for agent context. Keep this file updated as the project evolves._

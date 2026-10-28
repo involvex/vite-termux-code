@@ -12,6 +12,8 @@ export default function StatusBar() {
 		activePath,
 		terminalOpen,
 		setTerminalOpen,
+		vncOpen,
+		setVncOpen,
 		gitBranch,
 		gitDirty,
 		setPanel,
@@ -80,6 +82,20 @@ export default function StatusBar() {
 				onClick={() => setTerminalOpen(!terminalOpen)}
 			>
 				⌨ terminal
+			</button>
+			<button
+				className="status-term"
+				title={vncOpen ? 'Hide VNC drawer' : 'Show VNC drawer'}
+				onClick={() => {
+					const next = !vncOpen
+					setVncOpen(next)
+					if (next) {
+						setPanel('vnc')
+						setSidebarOpen(true)
+					}
+				}}
+			>
+				🖥 vnc{vncOpen ? ' ●' : ''}
 			</button>
 			<span className="status-item">{saving ? 'saving…' : status}</span>
 		</footer>
