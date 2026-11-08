@@ -18,9 +18,11 @@ function showPanel(panel: Panel) {
 }
 
 async function saveActive() {
-	const {tabs, activePath, updateTab, setSaving, setStatus} =
+	const {tabs, activePath, activeWorkspace, updateTab, setSaving, setStatus} =
 		useAppStore.getState()
-	const tab = tabs.find(t => t.path === activePath)
+	const tab =
+		tabs.find(t => t.path === activePath && t.workspace === activeWorkspace) ??
+		tabs.find(t => t.path === activePath)
 	if (!tab || tab.binary || tab.truncated) return
 	if (tab.content === tab.savedContent) {
 		setStatus('no changes to save')
@@ -28,8 +30,12 @@ async function saveActive() {
 	}
 	setSaving(true)
 	try {
-		const res = await api.save(tab.path, tab.content)
-		updateTab(tab.path, {savedContent: tab.content, mtime: res.mtime})
+		const res = await api.save(tab.path, tab.content, tab.workspace)
+		updateTab(
+			tab.path,
+			{savedContent: tab.content, mtime: res.mtime},
+			tab.workspace,
+		)
 		setStatus(`saved ${tab.path}`)
 	} catch (e) {
 		setStatus(e instanceof Error ? e.message : 'save failed')
@@ -51,15 +57,18 @@ async function newFile() {
 }
 
 function closeActive() {
-	const {activePath, tabs, closeTab, setStatus} = useAppStore.getState()
-	const tab = tabs.find(t => t.path === activePath)
+	const {activePath, activeWorkspace, tabs, closeTab, setStatus} =
+		useAppStore.getState()
+	const tab =
+		tabs.find(t => t.path === activePath && t.workspace === activeWorkspace) ??
+		tabs.find(t => t.path === activePath)
 	if (!tab) return
 	if (
 		tab.content !== tab.savedContent &&
 		!window.confirm(`Close ${tab.path} with unsaved changes?`)
 	)
 		return
-	closeTab(tab.path)
+	closeTab(tab.path, tab.workspace)
 	setStatus(`closed ${tab.path}`)
 }
 

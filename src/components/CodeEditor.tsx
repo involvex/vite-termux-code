@@ -530,7 +530,7 @@ export default function CodeEditor({filePath}: {filePath: string}) {
 				EditorView.updateListener.of(update => {
 					if (update.docChanged) {
 						const text = update.state.doc.toString()
-						updateTab(filePath, {content: text})
+						updateTab(filePath, {content: text}, tabWorkspace)
 						pushChange(text)
 					}
 				}),

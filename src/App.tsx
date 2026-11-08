@@ -195,11 +195,15 @@ export default function App() {
 								.read(msg.path as string, wsIndex)
 								.then(d => {
 									if (!d.binary && d.content !== undefined) {
-										updateTab(msg.path as string, {
-											content: d.content,
-											savedContent: d.content,
-											mtime: d.mtime,
-										})
+										updateTab(
+											msg.path as string,
+											{
+												content: d.content,
+												savedContent: d.content,
+												mtime: d.mtime,
+											},
+											wsIndex,
+										)
 									}
 								})
 								.catch(() => {})

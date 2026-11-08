@@ -8,6 +8,7 @@ export default function EditorTabs() {
 	const {
 		tabs,
 		activePath,
+		activeWorkspace,
 		setActive,
 		closeTab,
 		updateTab,
@@ -15,19 +16,24 @@ export default function EditorTabs() {
 		setStatus,
 	} = useAppStore()
 
+	const findTab = (path: string, workspace?: number) =>
+		tabs.find(
+			t =>
+				t.path === path &&
+				(workspace !== undefined ? t.workspace === workspace : true),
+		)
+
 	const save = async (path: string, workspace?: number) => {
-		const tab = tabs.find(t => t.path === path)
+		const tab = findTab(path, workspace)
 		if (!tab || tab.binary || tab.truncated) return
 		if (tab.content === tab.savedContent) return
+		const ws = workspace ?? tab.workspace
 		setSaving(true)
 		try {
-			const res = await api.save(path, tab.content, workspace)
-			updateTab(path, {savedContent: tab.content, mtime: res.mtime})
+			const res = await api.save(path, tab.content, ws)
+			updateTab(path, {savedContent: tab.content, mtime: res.mtime}, ws)
 			setStatus(`saved ${path}`)
-			notifyFileSaved(
-				path,
-				workspace ?? tab.workspace ?? useAppStore.getState().activeWorkspace,
-			)
+			notifyFileSaved(path, ws ?? activeWorkspace)
 		} catch (e) {
 			setStatus(e instanceof Error ? e.message : 'save failed')
 		} finally {
@@ -47,7 +53,10 @@ export default function EditorTabs() {
 		)
 	}
 
-	const active = tabs.find(t => t.path === activePath) ?? tabs[0]
+	const active =
+		tabs.find(t => t.path === activePath && t.workspace === activeWorkspace) ??
+		tabs.find(t => t.path === activePath) ??
+		tabs[0]
 
 	return (
 		<div className="editor-col">
@@ -62,10 +71,12 @@ export default function EditorTabs() {
 			>
 				{tabs.map(t => {
 					const dirty = t.content !== t.savedContent
+					const isActive =
+						t.path === active?.path && t.workspace === active?.workspace
 					return (
 						<div
-							key={t.path}
-							className={`tab ${t.path === active?.path ? 'active' : ''}`}
+							key={`${t.workspace ?? 'w'}:${t.path}`}
+							className={`tab ${isActive ? 'active' : ''}`}
 							onClick={() => setActive(t.path)}
 						>
 							<span
@@ -85,7 +96,7 @@ export default function EditorTabs() {
 										!window.confirm(`Close ${t.path} with unsaved changes?`)
 									)
 										return
-									closeTab(t.path)
+									closeTab(t.path, t.workspace)
 								}}
 							>
 								×

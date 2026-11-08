@@ -100,8 +100,8 @@ interface AppState {
 	setPaletteOpen: (v: boolean) => void
 	setPanel: (p: Panel) => void
 	openTab: (t: OpenTab) => void
-	updateTab: (path: string, patch: Partial<OpenTab>) => void
-	closeTab: (path: string) => void
+	updateTab: (path: string, patch: Partial<OpenTab>, workspace?: number) => void
+	closeTab: (path: string, workspace?: number) => void
 	setActive: (path: string | null) => void
 	navigateBrowser: (url: string) => void
 	browserBack: () => void
@@ -335,18 +335,24 @@ export const useAppStore = create<AppState>()((set, get) => {
 					panel: s.panel,
 				}
 			}),
-		updateTab: (path, patch) =>
-			set(s => ({
-				tabs: s.tabs.map(t =>
-					t.path === path && t.workspace === patch.workspace
-						? {...t, ...patch}
-						: t,
-				),
-			})),
-		closeTab: path =>
+		updateTab: (path, patch, workspace) =>
 			set(s => {
-				const idx = s.tabs.findIndex(t => t.path === path)
-				const tabs = s.tabs.filter(t => t.path !== path)
+				const ws = workspace ?? patch.workspace
+				return {
+					tabs: s.tabs.map(t =>
+						t.path === path && (ws === undefined ? true : t.workspace === ws)
+							? {...t, ...patch}
+							: t,
+					),
+				}
+			}),
+		closeTab: (path, workspace) =>
+			set(s => {
+				const match = (t: OpenTab) =>
+					t.path === path &&
+					(workspace === undefined ? true : t.workspace === workspace)
+				const idx = s.tabs.findIndex(match)
+				const tabs = s.tabs.filter(t => !match(t))
 				let activePath = s.activePath
 				if (activePath === path) {
 					activePath =
